@@ -1,0 +1,65 @@
+[project]
+name = "3dpic-router"
+version = "0.1.0"
+description = "3D-PIC Router — layer-assignment routing optimization for dual-layer SiN waveguide photonic integrated circuits."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12,<3.14"
+authors = [
+    { name = "0x5859" },
+]
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.12",
+    "matplotlib==3.9.2",  # pinned for PDF byte determinism (spec R4); no cp314 wheel — see requires-python upper bound.
+    "pandas>=2.2",
+    "shapely>=2.0",
+    "gdstk>=0.9",
+    "networkx>=3.6.1",
+    "jsonschema>=4.21",
+    "pyarrow>=24.0.0",
+    "pypdf>=6.11.0",
+    # REFACTOR_GOALS.md M-J: E4-expanded optimizer baselines (paper
+    # reviewer response). Stage 1 added pymoo (`ga_pymoo`); Stage 2 adds
+    # `pso_pyswarms` (pyswarms), `cmaes` (`cma`, already transitive
+    # via pymoo but pinned explicitly to lock the version), and
+    # `bo_skopt` (`scikit-optimize`). Pinned to major-version floors so
+    # a future API break is caught by uv.lock review rather than
+    # silently changing E4 results.
+    "pymoo>=0.6",
+    "pyswarms>=1.3",
+    "cma>=4.0",
+    "scikit-optimize>=0.10",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# Importable name is `routing_py_rebuild` (matches the directory under code/).
+# Distribution name on the [project] table is `3dpic-router` — these don't need to match.
+packages = ["code/routing_py_rebuild"]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=6.29",
+    "jupyterlab>=4.2",
+    "ruff>=0.6",
+    "pytest>=8.0",
+    "pytest-timeout>=2.3",
+    "hypothesis>=6.152.6",
+    "pillow>=10.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "NPY"]
+
+[tool.pytest.ini_options]
+pythonpath = ["code"]
+testpaths = ["code/tests"]

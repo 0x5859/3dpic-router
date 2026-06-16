@@ -1,0 +1,12 @@
+[submodule "third_party/pcg-cpp"]
+	path = third_party/pcg-cpp
+	url = https://github.com/imneme/pcg-cpp.git
+[submodule "third_party/Catch2"]
+	path = third_party/Catch2
+	url = https://github.com/catchorg/Catch2.git
+[submodule "third_party/lbfgs-cpp"]
+	path = third_party/lbfgs-cpp
+	url = https://github.com/twesterhout/lbfgs-cpp.git
+[submodule "third_party/gsl-lite"]
+	path = third_party/gsl-lite
+	url = https://github.com/martinmoene/gsl-lite.git

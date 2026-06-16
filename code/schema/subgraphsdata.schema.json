@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://3dsinic.local/schema/subgraphsdata.schema.json",
+  "title": "subgraphsdata.json (v1.x / v2.0)",
+  "description": "Self-contained optimizer snapshot consumed by plotting. v1.x = pre-multilayer baseline; v2.0 = multi-layer + waveguides_per_link explicit (M3). v2.0 keeps crosstalk fields optional (M4 will land them). See REFACTOR_GOALS.md §3-1.",
+  "type": "object",
+  "required": [
+    "General Parameters",
+    "positions",
+    "complete_graph",
+    "loss_analysis"
+  ],
+  "$comment": "schema_version is NOT in required: REFACTOR_GOALS.md §3-1 兼容性策略 treats a missing schema_version as legacy v1.x. The allOf.if/then below only enforces the v2.0 extra required fields when schema_version is explicitly '2.0'.",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^(1\\.[0-9]+|2\\.0)$"
+    },
+    "General Parameters": {
+      "type": "object",
+      "required": ["k"],
+      "properties": {
+        "k": { "type": "integer", "minimum": 3 },
+        "L": { "type": "integer", "minimum": 1 },
+        "edge_coupler_layer": { "type": "integer", "minimum": 0 },
+        "perimeter_layer": { "type": "integer", "minimum": 0 },
+        "layer_pitch_um": { "type": "number", "exclusiveMinimum": 0 },
+        "waveguides_per_link": { "type": "integer", "minimum": 1 },
+        "Loss of Taper": { "type": "number" },
+        "Loss of Crossing": { "type": "number" },
+        "Loss of Interlayer Crossing": { "type": "number" },
+        "Loss of Intralayer Crosstalk": { "type": ["number", "null"] },
+        "Loss of Interlayer Crosstalk": { "type": ["number", "null"] },
+        "coherence_model": { "type": "string" },
+        "polarization": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "positions": {
+      "type": "object",
+      "patternProperties": {
+        "^[0-9]+$": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      },
+      "additionalProperties": false
+    },
+    "complete_graph": {
+      "type": "array",
+      "description": "List of [u, v, attrs] triples for the complete-graph baseline."
+    },
+    "loss_analysis": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "crosstalk": {
+      "$comment": "M4 rank-3 tensor (REFACTOR_GOALS.md §2-2 / §3-1). Optional even in v2.0 — files written by M3 omit the key entirely; M4 writers populate it when loss_*_crosstalk coefficients are provided. shape == [k, k, k]; values[s][d][t] is dB power at victim t when s→d is energized; diagonals (s==d, s==t, t==d) and below-threshold arrivals are JSON null.",
+      "type": ["object", "null"],
+      "required": ["unit", "shape", "values"],
+      "properties": {
+        "unit": { "type": "string", "const": "dB" },
+        "shape": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "type": "integer", "minimum": 1 }
+        },
+        "coherence_model": { "type": "string" },
+        "polarization": { "type": "string" },
+        "symmetric": { "type": "boolean" },
+        "diagonal_convention": { "type": "string" },
+        "max_hops": { "type": "integer", "minimum": 0 },
+        "threshold_db": { "type": "number" },
+        "loss_intralayer_crosstalk": { "type": ["number", "null"] },
+        "loss_interlayer_crosstalk": { "type": ["number", "null"] },
+        "values": {
+          "type": "array",
+          "$comment": "Rank-3 nested list (k×k×k). Leaves are number-or-null; the inner shape is validated structurally (each level is an array) but the engine is responsible for matching shape[].",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": { "type": ["number", "null"] }
+            }
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "patternProperties": {
+    "^Layer_[0-9]+$": {
+      "type": "object",
+      "required": ["edges"],
+      "properties": {
+        "edges": {
+          "type": "array",
+          "description": "List of [u, v, attrs] triples for that layer's edges."
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "v2.0 path: tighten loader — General Parameters must declare L / edge_coupler_layer / perimeter_layer / waveguides_per_link / layer_pitch_um (REFACTOR_GOALS.md §3-1).",
+      "if": {
+        "properties": {
+          "schema_version": { "const": "2.0" }
+        },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "General Parameters": {
+            "required": [
+              "k",
+              "L",
+              "edge_coupler_layer",
+              "perimeter_layer",
+              "waveguides_per_link",
+              "layer_pitch_um"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

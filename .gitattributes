@@ -1,0 +1,9 @@
+# Normalize line endings to LF on checkin (cross-platform consistency)
+* text=auto
+
+# Binary point-set fixtures — never line-ending-convert
+*.b16 binary
+
+# Vendored third-party C++ — exclude from GitHub language stats and diffs
+code/routing_cpp_rebuild/external/**     linguist-vendored
+code/routing_cpp_rebuild/include/nlohmann/** linguist-vendored

@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://3dsinic.local/schema/run_report.schema.json",
+  "title": "run_report.json (v1.0)",
+  "description": "Per-run optimizer report. Companion to subgraphsdata.json. See REFACTOR_GOALS.md §3-2.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "config", "trace", "timings", "summary"],
+  "additionalProperties": true,
+  "$comment": "Root is open within v1.x to allow additive minor evolution (e.g. aggregate `layers[]` per §1-1-a item 3, `cross_impl_delta` per §2). trace[].items stays strict — that's the load-bearing contract for plot_convergence.",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+$",
+      "description": "Major.minor; v1.x is the eval-count iter-semantics regime (§1-1-a risk note)."
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "config": {
+      "type": "object",
+      "description": "Mirror of subgraphsdata.json `General Parameters`. Free-form to track optimizer/loss params.",
+      "additionalProperties": true
+    },
+    "trace": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["iter", "loss", "wall_ms", "is_new_best"],
+        "additionalProperties": false,
+        "properties": {
+          "iter": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "loss_function call count (eval-count semantics, NOT SA outer iter)."
+          },
+          "loss": {
+            "type": "number"
+          },
+          "wall_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Milliseconds since Optimizer.optimize() entry; same origin as timings.optimization_wall_ms."
+          },
+          "is_new_best": {
+            "type": "boolean",
+            "description": "True iff loss < best_so_far at the time of this eval (sink-computed)."
+          }
+        }
+      }
+    },
+    "timings": {
+      "type": "object",
+      "description": "Phase wall-clock totals in milliseconds. Phase names are conventional but not enumerated here — each milestone may add new phases.",
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*_ms$": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "initial_loss",
+        "final_loss",
+        "relative_drop",
+        "iterations",
+        "best_at_iter"
+      ],
+      "additionalProperties": true,
+      "$comment": "Open within v1.x: M3+ may add per-layer stats; §1-2-b 验收口径 names `cross_impl_delta` as a future field.",
+      "properties": {
+        "initial_loss": {
+          "type": "number"
+        },
+        "final_loss": {
+          "type": "number"
+        },
+        "relative_drop": {
+          "type": "number"
+        },
+        "iterations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "best_at_iter": {
+          "type": "integer",
+          "minimum": -1,
+          "description": "-1 only when iterations == 0 (no eval was ever recorded)."
+        },
+        "layers": {
+          "type": "array",
+          "description": "Per-layer aggregate stats (§1-1-a item 3). Optional in v1.x; present when the orchestrator calls RunRecorder.set_aggregate(...).",
+          "items": {
+            "type": "object",
+            "required": ["layer", "edge_count", "crossings"],
+            "additionalProperties": false,
+            "properties": {
+              "layer": { "type": "integer", "minimum": 0 },
+              "edge_count": { "type": "integer", "minimum": 0 },
+              "crossings": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "crosslayer_crossings_total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total interlayer crossings across all layer pairs (§1-1-a item 3). Post-2026-05-15 default = 1 * geometric events (convention='geometric', matches paper reporting); pass waveguides_per_link=2 for the physical convention (convention='physical') aligned with the loss model's implicit 2x. See REFACTOR_GOALS.md §4 M3 附注 + §7 Q-e."
+        },
+        "crosslayer_crossings_convention": {
+          "type": "string",
+          "enum": ["physical", "geometric", "experimental"],
+          "description": "Whether crosslayer_crossings_total has been multiplied by waveguides_per_link. 'geometric' = no (wpl=1, post-2026-05-15 default, matches paper reporting); 'physical' = yes (wpl=2, opt-in, matches loss model's implicit 2x); 'experimental' = wpl in {3,4,...,32} where the stats label is documented as semantically distinct from the loss model — see REFACTOR_GOALS.md §4 M3 附注 'Warning 策略' + §7 Q-e. The constructor/loader notice is the runtime signal; this field is the durable record for offline readers."
+        }
+      }
+    }
+  }
+}
