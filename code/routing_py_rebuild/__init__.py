@@ -28,6 +28,7 @@ from .plotting import (
     DEFAULT_COLORMAP,
     NODE_FILL_COLOR,
     PlotData,
+    ProgressData,
     crossings_color,
     get_colormap,
     list_styles,
@@ -37,6 +38,8 @@ from .plotting import (
     plot_layer_edges,
     plot_timings,
     register_style,
+    render_progress_replay,
+    show_progress_replay,
     visualize_layers,
     visualize_loss_analysis,
     visualize_ring,
@@ -51,6 +54,7 @@ from .positions import (
     distribute_nodes_around_square,
     distribute_nodes_around_triangle,
 )
+from .progress import PROGRESS_MODES, ProgressOptions, ProgressTracker
 from .statistics import (
     IterEvent,
     NullSink,
@@ -81,6 +85,13 @@ __all__ = [
     "plot_convergence",
     "plot_timings",
     "plot_crosstalk_heatmap",
+    # optimization-process visualization (run_optimization(progress=...))
+    "PROGRESS_MODES",
+    "ProgressOptions",
+    "ProgressTracker",
+    "ProgressData",
+    "render_progress_replay",
+    "show_progress_replay",
     "compute_crosstalk_tensor",
     "distribute_nodes",
     "distribute_nodes_around_square",

@@ -24,11 +24,12 @@ self-contained JSON snapshot; plotting consumes that JSON via
 ```
 routing_py_rebuild/
 ├── __init__.py              Re-exports the public API
-├── __main__.py              CLI: `python -m routing_py_rebuild {optimize|plot|report}`
+├── __main__.py              CLI: `python -m routing_py_rebuild {optimize|plot|report|replay}`
 ├── api.py                   make_graph, run_optimization (end-to-end orchestration)
 ├── core.py                  SiNInterconnectionGraph: graph + crossings + loss + JSON I/O
 ├── io_utils.py              .b16 binary readers + point-set transforms
 ├── positions.py             Node-position generators (square / rectangle)
+├── progress.py              [P] ProgressTracker (eval_observer) for run_optimization(progress=...)
 ├── readme.md                this file
 │
 ├── optimizers/              Pluggable layer-assignment strategies (registry-based)
@@ -60,8 +61,16 @@ routing_py_rebuild/
     ├── layer_edges.py       Black-line single-layer subset plot
     ├── loss_analysis.py     Mean / variance / std / range bar charts
     ├── convergence.py       [M1] plot_convergence + plot_timings (run_report.json driven)
+    ├── progress_figure.py   [P] ProgressData (optimization_history.json) + ProgressFigure
+    ├── progress_live.py     [P] LiveProgressView — window / Jupyter / PNG-file live view
+    ├── progress_replay.py   [P] replay → GIF + HTML player, interactive replay window
     └── from_json.py         JSON → PlotData → dispatch (convenience entry)
 ```
+
+[P] tags mark the optimization-process visualization (`progress="live"` /
+`"record"`, see "Watching the optimization process" below). Pair with
+`code/schema/optimization_history.schema.json` and
+`code/tests/test_progress.py`.
 
 [M1] tags mark files added with the statistics milestone — REFACTOR_GOALS.md §1-1-a + §3-2 + §4. Pair with `code/schema/run_report.schema.json` for the report contract and `code/tests/test_statistics.py` for the acceptance suite (`uv run pytest code/tests/test_statistics.py`).
 
@@ -245,6 +254,93 @@ uv run python -m routing_py_rebuild plot \
 > classes' `optimize()` methods default to 1000 (DA) and 100 (DE) when
 > called directly.
 
+### Watching the optimization process
+
+`progress` selects how much of the optimization you see (default
+`"off"`: only the final result, exactly as before):
+
+```python
+# live: redraw the current best routing + loss curve while optimizing
+run_optimization(k=12, maxiter=200, output_dir="/tmp/run", progress="live")
+
+# record: save every improvement, then replay the whole process
+res = run_optimization(k=12, maxiter=200, output_dir="/tmp/run", progress="record")
+res["progress"]   # {"mode": "record", "history": ..., "gif": ..., "html": ...}
+
+# re-render / re-open a recorded run later
+from routing_py_rebuild import render_progress_replay, show_progress_replay
+render_progress_replay(res["progress"]["history"], formats=["gif"], fps=10)
+show_progress_replay(res["progress"]["history"])   # window with slider + play
+```
+
+```bash
+uv run python -m routing_py_rebuild optimize --k 12 --output-dir /tmp/run --progress live
+uv run python -m routing_py_rebuild optimize --k 12 --output-dir /tmp/run --progress record \
+    --progress-kwargs '{"formats": ["gif", "html"], "max_frames": 120}'
+uv run python -m routing_py_rebuild replay --history /tmp/run/.../optimization_history.json --show
+```
+
+What each frame shows: one square panel per layer (edges colored by
+per-edge same-layer crossings, the `layers_combined.pdf` palette; edges
+that changed layer since the previous frame are drawn thick with a dark
+outline when only a few changed), a colorbar, and the best loss so far
+against the (log-scaled) evaluation count over a band of all evaluated
+losses.
+
+- **live** — interactive matplotlib backend → a window, redrawn at most
+  every `interval` seconds and never for more than ~20 % of the run time
+  (`progress.LIVE_MAX_OVERHEAD`); at the end it stays open until closed
+  (`show=False` to return immediately). Jupyter inline backend → one
+  output updated in place. Headless (Agg) → `optimization_live.png` is
+  rewritten atomically in the run directory. A display error disables
+  the view with a warning; the optimization always continues.
+- **record** — writes `optimization_history.json` (every frame; see the
+  contract below), then `optimization_progress.gif` (the final routing
+  holds 2.5 s) and `optimization_progress.html` (self-contained player:
+  play / pause / step / slider / speed / loop, keyboard shortcuts). With a
+  GUI backend the replay then opens in a window with a slider and a play
+  button; in Jupyter the player is shown inline. Ctrl-C during the run
+  still saves the improvements found so far.
+
+`progress_kwargs` / `--progress-kwargs` (`progress.ProgressOptions`;
+unknown keys raise `TypeError`): `interval` (0.5 s), `show` (True),
+`formats` (`["gif", "html"]`, `[]` = history only), `max_frames` (200 —
+the animation is capped, the JSON keeps every frame), `fps` (None =
+automatic, 4–15), `dpi` (100).
+
+Tracking is an `eval_observer`, called after each loss evaluation with
+read-only access, so every mode yields the same trace and result for a
+given seed (`test_progress_modes_do_not_perturb_the_optimizer`). Record
+mode adds well under 1 % to the optimizer wall time; live mode adds its
+drawing time (bounded as above). With `collect_statistics=True` the
+record outputs are timed as `progress_history_write_ms` and
+`progress_replay_ms`.
+
+#### `optimization_history.json` contract
+
+Written next to `subgraphsdata.json`, validated against
+`code/schema/optimization_history.schema.json` on write and read (plus
+cross-field checks in `plotting/progress_figure.py::_validate_history`):
+
+```
+schema_version: "1.0"
+k, L, edge_coupler_layer, perimeter_layer
+positions:   {"0": [x, y], ...}
+edges:       [[u, v], ...]            order of every per-edge array below
+run:         {optimizer, maxiter, seed, loss_crossing, loss_taper, ...}
+frames:      [{eval_index, wall_ms, loss, layers: [...], crossings: [...], final}, ...]
+evaluations: {count, start: [...], min: [...], max: [...]}   log-spaced buckets
+summary:     {evaluations, improvements, initial_loss, final_loss, wall_ms}
+```
+
+One frame per strict new best (in evaluation order); `layers` are the
+effective per-edge layers (rounded, perimeter pinned) and `crossings`
+the per-edge same-layer crossing counts. The last frame is flagged
+`final` and equals the routing in `subgraphsdata.json`; if the
+optimizer's returned result differs from its last new best, the result
+is appended as an extra final frame (then `improvements` =
+`len(frames) - 1`).
+
 ---
 
 ## Module-level overview
@@ -308,14 +404,17 @@ into one call. When `save_json=True` (the default) plotting consumes
 the JSON it just wrote; when `save_json=False` the orchestrator
 explicitly calls `graph.analyze_loss()` first, then snapshots in
 memory via `PlotData.from_graph`. Plotting itself is unchanged
-between the two paths.
+between the two paths. `progress="live"` / `"record"` additionally
+attaches a `progress.ProgressTracker` as the optimizer's
+`eval_observer` (chained after any caller-supplied one).
 
 ### `__main__` — CLI
 
-Two subcommands. `optimize` calls `run_optimization` with argparse
-arguments. `plot` loads a JSON and dispatches to a registered style.
-The plot subcommand is minimal — JSON is self-contained, so it needs
-no `--k` / positions arguments.
+`optimize` calls `run_optimization` with argparse arguments. `plot`
+loads a JSON and dispatches to a registered style. The plot subcommand
+is minimal — JSON is self-contained, so it needs no `--k` / positions
+arguments. `report` renders a `run_report.json`; `replay` renders /
+opens a recorded `optimization_history.json`.
 
 ---
 
@@ -342,12 +441,17 @@ CLI entry: `python -m routing_py_rebuild ...`. Subparsers:
 - `optimize` — flags `--k --optimizer {dual_annealing,differential_evolution}
   --maxiter --seed --optimizer-kwargs --output-dir --loss-crossing
   --loss-taper --loss-interlayercrossing --plot-style {visualize}
-  --plot-kwargs --no-plot --no-loss-analysis --no-json`. Hands
-  everything off to `api.run_optimization`.
+  --plot-kwargs --no-plot --no-loss-analysis --no-json
+  --progress {off,live,record} --progress-kwargs`. Hands everything off
+  to `api.run_optimization`.
 - `plot` — flags `--json (required) --style {visualize} --out-dir
   --plot-kwargs --also-loss-analysis`. No `--k` or positions flags;
   everything comes from the JSON. Hands off to
   `plotting.plot_from_json`.
+- `replay` — flags `--history (required; file or run directory)
+  --out-dir --formats gif,html --fps --max-frames --dpi --show`.
+  Hands off to `plotting.render_progress_replay` /
+  `plotting.show_progress_replay`.
 
 `--optimizer-kwargs` / `--plot-kwargs` accept a JSON dict string.
 
@@ -368,9 +472,12 @@ Two functions:
   seed=5859, optimizer_kwargs=None, positions=None,
   output_dir="./assets/run/", loss_crossing=0.3, loss_taper=1.0,
   loss_interlayercrossing=0.006, plot=True, plot_style="visualize",
-  plot_kwargs=None, save_json=True, run_loss_analysis=True)` —
+  plot_kwargs=None, save_json=True, run_loss_analysis=True, ...,
+  progress="off", progress_kwargs=None)` —
   end-to-end orchestration. Returns
-  `{graph, best_layers, loss, json_path, plot_data}`.
+  `{graph, best_layers, loss, json_path, plot_data, report_path,
+  crosstalk, progress}` (`progress` is None when `progress="off"`, else
+  the mode plus the paths it wrote).
 
 Plot path: when `save_json=True`, plotting consumes the JSON just written
 (`PlotData.from_json`); when `save_json=False`, the orchestrator calls
@@ -416,6 +523,12 @@ Method groups:
   pins perimeter edges (`|u-v| ∈ {1, k-1}`) to layer 0 regardless of
   input — preserves the original physical-ring invariant.
   `apply_optimization_result(layers)` is the public version.
+- **Progress helpers** (read-only, not on the hot path):
+  `effective_layers(layers)` (round + perimeter pin — the routing
+  `loss_function` scores) and `intralayer_crossing_counts(layers)`
+  (per-edge same-layer crossings from the Phase A index; equals the
+  `crossings` attr `create_subgraphs` stamps). Used by
+  `progress.ProgressTracker`.
 - **Loss analysis**: `analyze_loss()` populates `self.loss_analysis` —
   mean/var/std/range per layer plus the flattened and complete-graph
   variants. Resets `sub_G` / `total_crossings_of_sub_G` /
@@ -683,6 +796,46 @@ entry. Loads the JSON via `PlotData.from_json`, picks `out_dir` if
 given (else falls back to the JSON's directory), runs `visualize_layers`
 with the chosen style, and optionally runs `visualize_loss_analysis`.
 Returns the `PlotData` for further use.
+
+#### `progress.py` (top level)
+
+`ProgressTracker(graph, *, mode, options, run, out_dir)` — the
+`eval_observer` behind `run_optimization(progress=...)`. Per evaluation
+it feeds a `LossEnvelope` (streaming min/max in log-spaced buckets,
+bounded memory); per strict new best it snapshots
+`graph.effective_layers(x)` + `graph.intralayer_crossing_counts(...)`
+(read-only `core` helpers using the cached Phase A index) as a
+`ProgressFrame`. `finish(best_layers, fun)` flags / appends the final
+frame; `write_history()` / `write_replay()` / `present()` produce the
+record outputs and the end-of-run display. Also `ProgressOptions`,
+`PROGRESS_MODES`, `LIVE_MAX_OVERHEAD`, `chain_observers`.
+
+#### `plotting/progress_figure.py`
+
+`ProgressData` — geometry + frames + evaluation envelope, with
+`from_json` / `write_json` (schema-validated) for
+`optimization_history.json`. `ProgressFigure` — the frame renderer: one
+`LineCollection` per layer panel updated in place (edge geometry from
+`edge_polylines`, which reproduces the `visualize` style's arcs), a
+colorbar with the `crossings_color` window, and the log-x loss panel.
+Fixed inch-based layout so frames never jitter.
+
+#### `plotting/progress_live.py`
+
+`LiveProgressView` — picks `"window"` / `"notebook"` / `"file"` from the
+matplotlib backend (`live_display_mode`), opens the figure before the
+optimizer starts, then redraws on each `LiveState` the tracker pushes;
+`hold()` blocks until the window is closed.
+
+#### `plotting/progress_replay.py`
+
+`render_progress_replay(history, *, out_dir, formats, fps, max_frames,
+dpi)` renders each selected frame once and writes the GIF (per-frame
+256-color palette) and/or the HTML player (base64 PNG frames + a small
+inline script). `show_progress_replay(history, ...)` opens the same
+frames in a matplotlib window with a `Slider`, a play/pause `Button` and
+←/→/space/Home/End keys (prints a note and returns on non-GUI backends).
+`select_frames` keeps first and final frames when capping.
 
 ---
 

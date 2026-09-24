@@ -27,7 +27,7 @@ JSON Schemas in `code/schema/`.
 |---|---|
 | `code/routing_py_rebuild/` | Python core: `core.py` (graph + crossings + loss + JSON I/O), `api.py`, `crosstalk.py`, `positions.py`, `io_utils.py`, the `optimizers/` registry (dual annealing, differential evolution, GA, PSO, CMA-ES, BO, …), `statistics/` (run reports), and `plotting/` (JSON-driven figure rendering). |
 | `code/routing_cpp_rebuild/` | C++ implementation. `src/` + `include/sinic/`, the vendored `external/dual-annealing/` GSA library, `tests/`, and a `build_and_run.sh` one-shot driver. |
-| `code/schema/` | JSON Schemas for the data contract (`subgraphsdata.schema.json`, `run_report.schema.json`). Validated at write **and** read time by both implementations. |
+| `code/schema/` | JSON Schemas for the data contract (`subgraphsdata.schema.json`, `run_report.schema.json`, and the Python-only `optimization_history.schema.json`). Validated at write **and** read time by both implementations. |
 | `code/tests/` | Python test suite — parity, crossings, crosstalk, multilayer, per-optimizer, and statistics — plus `golden/` reference fixtures. |
 | `code/assets/MinimizedRectlinear/` | Pre-computed `minimize{k}.b16` point sets consumed by the `io_utils` readers. |
 
@@ -63,6 +63,31 @@ plot_from_json(res["json_path"], style="visualize", out_dir="/tmp/sin_plot/")
 
 See `code/routing_py_rebuild/readme.md` for the full module-level reference (architecture,
 the optimizer/plot-style registries, and the JSON contract).
+
+### Watching the optimization process
+
+By default only the final routing is plotted. `--progress` (CLI) / `progress=` (library)
+also shows how the optimizer got there:
+
+| Mode | What you get |
+|---|---|
+| `off` (default) | Unchanged: final result only. |
+| `live` | A figure — one panel per layer plus the best-loss curve — redrawn while the optimizer runs. It opens in a window on a desktop, updates in place in Jupyter, and on a headless machine rewrites `optimization_live.png`. |
+| `record` | Every improvement is saved to `optimization_history.json`. After the run, the whole process is rendered to `optimization_progress.gif` and `optimization_progress.html`, a self-contained player with play/pause, a slider, and speed control. On a desktop the replay also opens in a window. |
+
+```bash
+uv run python -m routing_py_rebuild optimize --k 12 --maxiter 200 --output-dir /tmp/run --progress live
+uv run python -m routing_py_rebuild optimize --k 12 --maxiter 200 --output-dir /tmp/run --progress record
+
+# Re-render or re-open a recorded run later
+uv run python -m routing_py_rebuild replay --history /tmp/run/.../optimization_history.json --show
+```
+
+Tracking never changes the optimization: the same seed gives the same result in every mode.
+`record` costs well under 1% of the optimizer's run time. `live` pauses the optimizer while a
+frame is drawn, capped at about 20% of the run time. Options such as the redraw interval,
+replay formats, frame cap, fps, and dpi go in `--progress-kwargs` / `progress_kwargs`
+(for example `'{"interval": 1.0, "formats": ["gif"]}'`).
 
 ## C++ quickstart
 

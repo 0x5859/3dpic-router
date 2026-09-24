@@ -1193,6 +1193,40 @@ class SiNInterconnectionGraph:
             return float(np.mean(per_edge_loss[selected]))
         return 0.0
 
+    def effective_layers(self, layers: Iterable[float]) -> np.ndarray:
+        """Integer per-edge layers that ``loss_function(layers)`` scores.
+
+        Rounds the (possibly continuous) optimizer vector the same way as
+        :meth:`loss_function` / :meth:`apply_optimization_result` and pins
+        the perimeter ring to ``perimeter_layer``. Indexed by
+        ``list(self.G.edges())``. Read-only helper for progress tracking;
+        not used by the optimizer hot loop.
+        """
+        self._ensure_crossings_ready()
+        pinned = np.round(np.asarray(layers, dtype=float)).astype(np.int64)
+        if pinned.shape != (len(self._edge_list),):
+            raise ValueError(
+                f"layers has shape {pinned.shape}, expected ({len(self._edge_list)},)"
+            )
+        pinned[self._perimeter_mask] = self.perimeter_layer
+        return pinned
+
+    def intralayer_crossing_counts(self, layers: np.ndarray) -> np.ndarray:
+        """Per-edge same-layer crossing counts for an :meth:`effective_layers`
+        vector, from the cached Phase A index (no geometry pass).
+
+        Equals the ``crossings`` attribute that :meth:`create_subgraphs`
+        stamps on each layer subgraph for the same assignment.
+        """
+        self._ensure_crossings_ready()
+        n_edges = len(self._edge_list)
+        pairs = self._crossing_pairs
+        if not pairs.shape[0]:
+            return np.zeros(n_edges, dtype=np.int64)
+        layers = np.asarray(layers)
+        same = layers[pairs[:, 0]] == layers[pairs[:, 1]]
+        return np.bincount(pairs[same].ravel(), minlength=n_edges).astype(np.int64)
+
     def _apply_layer_assignment(self, layers: np.ndarray) -> None:
         """Stamp per-edge layers, pinning the perimeter ring to
         ``self.perimeter_layer``.

@@ -1,10 +1,12 @@
 """CLI entry: ``python -m routing_py_rebuild ...``.
 
-Three subcommands:
+Four subcommands:
 
   optimize   Run an optimizer end-to-end (graph → solve → JSON → plots).
+             ``--progress live|record`` also shows the optimization process.
   plot       Reload a saved subgraph JSON and render a chosen style.
   report     Render convergence + timings PNGs from a ``run_report.json``.
+  replay     Re-render / re-open a recorded ``optimization_history.json``.
 
 Defaults match the original demo (k=12, dual_annealing, plain 'visualize').
 """
@@ -15,8 +17,9 @@ import json as _json
 import sys
 
 from .api import run_optimization
-from .plotting import plot_from_json
+from .plotting import plot_from_json, render_progress_replay, show_progress_replay
 from .plotting.convergence import plot_convergence, plot_timings
+from .plotting.progress_replay import load_progress_data
 
 
 def _parse_kwargs(s: str | None) -> dict:
@@ -100,6 +103,16 @@ def _add_optimize_parser(sub):
     p.add_argument("--no-json", action="store_true")
     p.add_argument("--collect-statistics", action="store_true",
                    help="Record per-iter trace + phase timings; emits run_report.{json,md}.")
+    p.add_argument("--progress", default="off", choices=["off", "live", "record"],
+                   help="Show the optimization process: 'off' (default) = final result "
+                        "only; 'live' = redraw the current best routing while optimizing "
+                        "(GUI window, or optimization_live.png when headless); 'record' = "
+                        "save every improvement to optimization_history.json and replay "
+                        "the whole process afterwards (optimization_progress.gif/.html).")
+    p.add_argument("--progress-kwargs", default=None,
+                   help="JSON dict of progress options: interval (s between live "
+                        "redraws, default 0.5), show (default true), formats "
+                        "(default [\"gif\", \"html\"]), max_frames (200), fps, dpi (100).")
 
 
 def _add_plot_parser(sub):
@@ -121,12 +134,30 @@ def _add_report_parser(sub):
                    help="Output directory; defaults to the report file's directory.")
 
 
+def _add_replay_parser(sub):
+    p = sub.add_parser("replay", help="Replay a recorded optimization process")
+    p.add_argument("--history", required=True,
+                   help="Path to optimization_history.json (or the run directory).")
+    p.add_argument("--out-dir", default=None,
+                   help="Output directory; defaults to the history file's directory.")
+    p.add_argument("--formats", default="gif,html",
+                   help="Comma-separated files to write: gif, html ('' = none).")
+    p.add_argument("--fps", type=float, default=None,
+                   help="Frames per second (default: chosen from the frame count).")
+    p.add_argument("--max-frames", type=int, default=200,
+                   help="Most frames per animation; evenly spaced, first and final kept.")
+    p.add_argument("--dpi", type=float, default=100)
+    p.add_argument("--show", action="store_true",
+                   help="Open the interactive replay window (needs a GUI backend).")
+
+
 def _build_parser():
     parser = argparse.ArgumentParser(prog="routing_py_rebuild")
     sub = parser.add_subparsers(dest="cmd", required=True)
     _add_optimize_parser(sub)
     _add_plot_parser(sub)
     _add_report_parser(sub)
+    _add_replay_parser(sub)
     return parser
 
 
@@ -158,6 +189,8 @@ def _run_optimize(args):
         save_json=not args.no_json,
         run_loss_analysis=not args.no_loss_analysis,
         collect_statistics=args.collect_statistics,
+        progress=args.progress,
+        progress_kwargs=_parse_kwargs(args.progress_kwargs),
     )
     print(f"Final loss: {res['loss']}")
     print(f"JSON: {res['json_path']}")
@@ -184,6 +217,19 @@ def _run_report(args):
     print(f"Timings: {tim}")
 
 
+def _run_replay(args):
+    data = load_progress_data(args.history)
+    formats = [f.strip() for f in args.formats.split(",") if f.strip()]
+    paths = render_progress_replay(
+        data, out_dir=args.out_dir, formats=formats, fps=args.fps,
+        max_frames=args.max_frames, dpi=args.dpi,
+    )
+    for kind, path in paths.items():
+        print(f"{kind.upper()}: {path}")
+    if args.show:
+        show_progress_replay(data, fps=args.fps, max_frames=args.max_frames, dpi=args.dpi)
+
+
 def main(argv=None):
     args = _build_parser().parse_args(argv)
     if args.cmd == "optimize":
@@ -192,6 +238,8 @@ def main(argv=None):
         _run_plot(args)
     elif args.cmd == "report":
         _run_report(args)
+    elif args.cmd == "replay":
+        _run_replay(args)
     else:
         sys.exit("unknown command")
 

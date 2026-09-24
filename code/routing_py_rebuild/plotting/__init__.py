@@ -27,6 +27,8 @@ from .layer_edges import plot_layer_edges
 from .layers import list_styles, register_style, visualize_layers
 from .loss_analysis import visualize_loss_analysis
 from .plot_data import PlotData
+from .progress_figure import ProgressData
+from .progress_replay import render_progress_replay, show_progress_replay
 from .ring import visualize_ring
 
 __all__ = [
@@ -43,6 +45,10 @@ __all__ = [
     "plot_timings",
     # crosstalk renderer (REFACTOR_GOALS.md §2-2 / M4)
     "plot_crosstalk_heatmap",
+    # optimization-process replay (run_optimization(progress="record"))
+    "ProgressData",
+    "render_progress_replay",
+    "show_progress_replay",
     # color palette
     "DEFAULT_COLORMAP",
     "NODE_FILL_COLOR",
