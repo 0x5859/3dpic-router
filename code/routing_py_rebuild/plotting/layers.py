@@ -39,7 +39,8 @@ from ._style import FONT_SIZE, LINE_WIDTH, apply_rcparams
 # ---------------------------------------------------------------------------
 # Tunable knobs
 # ---------------------------------------------------------------------------
-CURVE_FACTOR = 0.27     # same-side arc bow, scaled by span / nodes_on_side
+CURVE_FACTOR = 0.27     # boundary-chord arc bow, scaled by span / nodes on that line
+ON_LINE_TOL = 1e-3      # chord within this fraction of the span of a node = runs through it
 XTICK_NBINS = 12        # max equal-spaced integer x-ticks per bar chart
 BAR_WIDTH_FRAC = 0.8    # bar fill vs. median neighbour spacing (<1 => gaps)
 HIST_H_FRAC = 0.5       # bar-chart row height as a fraction of the graph panel
@@ -90,22 +91,47 @@ def visualize_layers(plot_data, *, style: str = "visualize", **kwargs):
 # ---------------------------------------------------------------------------
 # Geometry helper
 # ---------------------------------------------------------------------------
-def _side_info_factory(positions):
-    """Closure returning ``(side_name, position_along_side)`` for a node."""
-    side_len = max(p[0] for p in positions.values())
-    epsilon = 1e-6
+def _edge_bends(positions, edges, nodes=None) -> list[float]:
+    """``arc3`` ``rad`` for each of ``edges`` (same order): nonzero for
+    chords that run along the boundary through other nodes, 0.0 for the rest.
 
-    def side_info(node):
-        x, y = positions[node]
-        if abs(y - side_len) < epsilon:
-            return ("top", x)
-        if abs(x - side_len) < epsilon:
-            return ("right", side_len - y)
-        if abs(y) < epsilon:
-            return ("bottom", side_len - x)
-        return ("left", y)
-
-    return side_info, side_len
+    Works for any node layout (square, rectangle, triangle, polygon,
+    circle, arbitrary coordinates). An edge is bowed when its straight
+    chord passes through another node of ``nodes`` (within
+    ``ON_LINE_TOL`` of the layout span) — its ends sit on one straight
+    stretch of the boundary with nodes in between, where the chord would
+    hide behind those nodes and the stretch's other chords. The bow is
+    ``CURVE_FACTOR * (nodes strictly between + 1) / (nodes on that
+    line)``, signed so that matplotlib's ``arc3`` (control point at the
+    chord midpoint + ``rad * (dy, -dx)``) bends toward the layout's
+    interior (the node centroid). On the square layouts this is exactly
+    the former top / right / bottom / left side rule.
+    """
+    nodes = list(positions) if nodes is None else list(nodes)
+    pts = np.array([positions[n] for n in nodes], dtype=float).reshape(-1, 2)
+    centroid = pts.mean(axis=0)
+    span = max(float(np.ptp(pts[:, 0])), float(np.ptp(pts[:, 1])), 1e-12)
+    tol = ON_LINE_TOL * span
+    bends: list[float] = []
+    for u, v in edges:
+        p0 = np.asarray(positions[u], dtype=float)
+        p2 = np.asarray(positions[v], dtype=float)
+        d = p2 - p0
+        length2 = float(d @ d)
+        if length2 == 0.0:
+            bends.append(0.0)
+            continue
+        rel = pts - p0
+        on_line = np.abs(d[0] * rel[:, 1] - d[1] * rel[:, 0]) <= tol * math.sqrt(length2)
+        t = (rel @ d) / length2
+        between = int(np.count_nonzero(on_line & (t > 1e-9) & (t < 1 - 1e-9)))
+        if between == 0:
+            bends.append(0.0)
+            continue
+        rad = CURVE_FACTOR * ((between + 1) / int(np.count_nonzero(on_line)))
+        outward = float((centroid - (p0 + p2) / 2.0) @ np.array([d[1], -d[0]])) < 0.0
+        bends.append(-rad if outward else rad)
+    return bends
 
 
 # ---------------------------------------------------------------------------
@@ -145,44 +171,24 @@ def _layer_bar_width(layers) -> float:
 # Panel drawers
 # ---------------------------------------------------------------------------
 def _draw_curved_edges(ax, g, positions, edge_cols, node_size):
-    """Draw edges; same-side non-adjacent pairs bow outward (arc3) while
-    every endpoint stays anchored on its node.
+    """Draw edges; chords that run along the boundary through other nodes
+    bow inward (arc3, see :func:`_edge_bends`) while every endpoint stays
+    anchored on its node.
 
     ``node_size`` is forwarded to every ``draw_networkx_edges`` call so
     the FancyArrowPatch shrink matches the real node radius
     (boundary-anchored). It is supplied by :func:`_draw_graph_panel`
     from the single :func:`_node_size`; do not call this directly.
     """
-    side_info, _ = _side_info_factory(positions)
-    side_nodes: dict[str, list[tuple]] = {
-        "top": [], "right": [], "bottom": [], "left": [],
-    }
-    for n in g.nodes():
-        s, coord = side_info(n)
-        side_nodes[s].append((coord, n))
-    for s in side_nodes:
-        side_nodes[s].sort()
-
-    def side_index(node, s):
-        return next(i for i, (_c, n) in enumerate(side_nodes[s]) if n == node)
-
-    for (u, v), ec in zip(g.edges(), edge_cols):
-        side_u, _ = side_info(u)
-        side_v, _ = side_info(v)
-        if side_u != side_v:
-            nx.draw_networkx_edges(
-                g, pos=positions, edgelist=[(u, v)], width=LINE_WIDTH,
-                edge_color=[ec], ax=ax, node_size=node_size,
-            )
-            continue
-        diff = abs(side_index(u, side_u) - side_index(v, side_u))
-        if diff == 1:
+    edgelist = list(g.edges())
+    bends = _edge_bends(positions, edgelist, nodes=g.nodes())
+    for (u, v), ec, rad in zip(edgelist, edge_cols, bends, strict=True):
+        if rad == 0.0:
             nx.draw_networkx_edges(
                 g, pos=positions, edgelist=[(u, v)], width=LINE_WIDTH,
                 edge_color=[ec], ax=ax, node_size=node_size,
             )
         else:
-            rad = CURVE_FACTOR * (diff / len(side_nodes[side_u]))
             nx.draw_networkx_edges(
                 g, pos=positions, edgelist=[(u, v)], width=LINE_WIDTH,
                 edge_color=[ec], connectionstyle=f"arc3,rad={rad}",

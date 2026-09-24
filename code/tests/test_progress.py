@@ -8,6 +8,7 @@ headless fallback, and the CLI entry points.
 """
 from __future__ import annotations
 
+import itertools
 import json
 import math
 import os
@@ -22,10 +23,12 @@ from PIL import Image, ImageSequence
 from routing_py_rebuild.__main__ import main as cli_main
 from routing_py_rebuild.api import make_graph, run_optimization
 from routing_py_rebuild.plotting import _style
+from routing_py_rebuild.plotting.layers import CURVE_FACTOR, _edge_bends
 from routing_py_rebuild.plotting.progress_figure import (
     HISTORY_FILENAME,
     ProgressData,
     ProgressFigure,
+    ProgressFrame,
     edge_polylines,
     frame_status,
 )
@@ -42,6 +45,7 @@ from routing_py_rebuild.plotting.progress_replay import (
     select_frames,
     show_progress_replay,
 )
+from routing_py_rebuild.positions import distribute_nodes
 from routing_py_rebuild.progress import (
     LossEnvelope,
     ProgressOptions,
@@ -445,6 +449,87 @@ def test_edge_polylines_bow_same_side_pairs_inward():
             assert 0.0 < mid[0] < 1.0 and 0.0 < mid[1] < 1.0  # inside the square
 
 
+# Layouts built side by side, with the node count of each straight stretch
+# of the boundary in index order (corners carry no node).
+_LAYOUTS = {
+    "square": (distribute_nodes("square", nodes_per_side=4), [4, 4, 4, 4]),
+    "rectangle": (distribute_nodes("rectangle", nodes_on_length=4, nodes_on_width=2),
+                  [4, 2, 4, 2]),
+    "triangle": (distribute_nodes("triangle", triangle_nodes_per_side=[4, 3, 2]), [4, 3, 2]),
+    "pentagon": (distribute_nodes("polygon", polygon_n_sides=5, polygon_nodes_per_side=3),
+                 [3] * 5),
+    "partial_rectangle": (distribute_nodes("partial_rectangle",
+                                           side_counts={"top": 4, "right": 2, "bottom": 3}),
+                          [4, 2, 3]),
+    "circle": (distribute_nodes("circle", k=12), [1] * 12),
+}
+
+
+@pytest.mark.parametrize("name", list(_LAYOUTS))
+def test_edge_bends_follow_straight_boundary_stretches(name):
+    """Any layout: a chord bows exactly when other nodes sit between its
+    ends on one straight stretch of the boundary, by CURVE_FACTOR x index
+    gap / nodes on the stretch, toward the interior whichever way the edge
+    is oriented."""
+    positions, stretches = _LAYOUTS[name]
+    pairs = list(itertools.combinations(range(len(positions)), 2))
+    expected, start = {}, 0
+    for n in stretches:
+        for u, v in itertools.combinations(range(start, start + n), 2):
+            if v - u >= 2:
+                expected[(u, v)] = CURVE_FACTOR * (v - u) / n
+        start += n
+    bends = _edge_bends(positions, pairs)
+    got = {e: abs(r) for e, r in zip(pairs, bends, strict=True) if r != 0.0}
+    assert got.keys() == expected.keys()
+    assert all(math.isclose(got[e], expected[e]) for e in expected)
+
+    centroid = np.mean(list(positions.values()), axis=0)
+    reverse = _edge_bends(positions, [(v, u) for u, v in pairs])
+    for (u, v), rad, rad_rev in zip(pairs, bends, reverse, strict=True):
+        p0, p2 = np.asarray(positions[u]), np.asarray(positions[v])
+        mid, d = (p0 + p2) / 2, p2 - p0
+        ctrl = mid + rad * np.array([d[1], -d[0]])
+        ctrl_rev = mid - rad_rev * np.array([d[1], -d[0]])  # (dy, -dx) flips with the edge
+        assert np.allclose(ctrl, ctrl_rev)
+        if rad:
+            assert (ctrl - mid) @ (centroid - mid) > 0  # bows inward
+
+    # Rounded coordinates (e.g. typed into a positions JSON) still count
+    # as on the stretch: the tolerance is a fraction of the layout span.
+    rounded = {n: (round(x, 4), round(y, 4)) for n, (x, y) in positions.items()}
+    assert [r != 0.0 for r in _edge_bends(rounded, pairs)] == [r != 0.0 for r in bends]
+
+
+def _one_frame_data(positions, L=2) -> ProgressData:
+    edges = list(itertools.combinations(range(len(positions)), 2))
+    frame = ProgressFrame(eval_index=0, wall_ms=0, loss=1.0, final=True,
+                          layers=np.arange(len(edges)) % L,
+                          crossings=np.zeros(len(edges), dtype=int))
+    return ProgressData(k=len(positions), L=L, edge_coupler_layer=0, perimeter_layer=0,
+                        positions=positions, edges=edges, frames=[frame])
+
+
+@pytest.mark.parametrize("positions, aspect", [
+    (distribute_nodes("square", nodes_per_side=3), 1.0),
+    # 5 x 3 bounding box plus a 9 % margin of the span (5) on every side
+    (distribute_nodes("rectangle", nodes_on_length=4, nodes_on_width=2), 3.9 / 5.9),
+    # a 12 x 1 strip is clamped to the widest allowed panel
+    (distribute_nodes("rectangle", nodes_on_length=6, nodes_on_width=1, length=12, width=1),
+     0.4),
+], ids=["square", "rectangle", "strip"])
+def test_routing_panels_take_the_layout_shape(positions, aspect):
+    pf = ProgressFigure(_one_frame_data(positions), dpi=40)
+    fig_w, fig_h = pf.fig.get_size_inches()
+    for ax in pf.layer_axes:
+        box = ax.get_position(original=True)
+        assert math.isclose(box.height * fig_h / (box.width * fig_w), aspect, rel_tol=1e-9)
+    cbar = pf.cax.get_position(original=True)
+    panel = pf.layer_axes[0].get_position(original=True)
+    assert panel.y0 < cbar.y0 and cbar.y1 < panel.y1  # colorbar within the panel row
+    plt.close("all")
+
+
 # ---------------------------------------------------------------------------
 # Mode "live" (headless: the suite runs on the Agg backend)
 # ---------------------------------------------------------------------------
@@ -510,3 +595,48 @@ def test_cli_optimize_record_then_replay(tmp_path, capsys):
     gif = tmp_path / "replay" / "optimization_progress.gif"
     with Image.open(gif) as im:
         assert im.n_frames <= 4
+
+
+# An irregular 8-port outline, numbered counter-clockwise along the boundary.
+_OUTLINE = {0: (0.0, 0.0), 1: (1.2, 0.0), 2: (3.0, 0.0), 3: (4.0, 1.1),
+            4: (4.0, 2.5), 5: (2.6, 3.4), 6: (0.9, 3.4), 7: (0.0, 1.7)}
+
+
+def test_cli_optimize_positions_json(tmp_path, capsys):
+    """Arbitrary coordinates from a file reach the saved routing and the
+    recorded history; k comes from the file."""
+    path = tmp_path / "outline.json"
+    path.write_text(json.dumps({str(n): list(p) for n, p in _OUTLINE.items()}))
+    cli_main([
+        "optimize", "--positions-json", str(path), "--maxiter", "5",
+        "--output-dir", str(tmp_path / "run"), "--no-plot", "--no-loss-analysis",
+        "--progress", "record", "--progress-kwargs", json.dumps({"formats": []}),
+    ])
+    captured = capsys.readouterr()
+    assert "crosses itself" not in captured.err
+    history = next(line.split(": ", 1)[1] for line in captured.out.splitlines()
+                   if line.startswith("[progress] history: "))
+    data = ProgressData.from_json(history)
+    assert data.k == len(_OUTLINE) and data.positions == _OUTLINE
+    saved = next(line.split(": ", 1)[1] for line in captured.out.splitlines()
+                 if line.startswith("JSON: "))
+    with open(saved) as f:
+        assert json.load(f)["positions"] == {str(n): list(p) for n, p in _OUTLINE.items()}
+
+
+def test_cli_positions_json_checks_k_and_node_order(tmp_path, capsys):
+    path = tmp_path / "outline.json"
+    path.write_text(json.dumps({str(n): list(p) for n, p in _OUTLINE.items()}))
+    with pytest.raises(SystemExit, match="--k 12 does not match the 8 nodes"):
+        cli_main(["optimize", "--positions-json", str(path), "--k", "12"])
+    path.write_text(json.dumps({"0": [0, 0], "1": [1, 0], "3": [1, 1]}))
+    with pytest.raises(SystemExit, match="contiguous set"):
+        cli_main(["optimize", "--positions-json", str(path)])
+    # Swap two nodes: the index walk now crosses itself -> warned, still runs.
+    swapped = dict(_OUTLINE)
+    swapped[1], swapped[5] = _OUTLINE[5], _OUTLINE[1]
+    path.write_text(json.dumps({str(n): list(p) for n, p in swapped.items()}))
+    cli_main(["optimize", "--positions-json", str(path), "--maxiter", "1",
+              "--output-dir", str(tmp_path / "run"), "--no-plot", "--no-loss-analysis",
+              "--no-json"])
+    assert "crosses itself" in capsys.readouterr().err

@@ -244,6 +244,11 @@ uv run python -m routing_py_rebuild optimize --k 12 --maxiter 200 \
 uv run python -m routing_py_rebuild optimize --k 12 \
     --optimizer differential_evolution --maxiter 50 --output-dir /tmp/run_de
 
+# Arbitrary node coordinates {"<node>": [x, y], ...}, numbered along the
+# boundary; k comes from the file
+uv run python -m routing_py_rebuild optimize --positions-json layout.json \
+    --maxiter 200 --output-dir /tmp/run_custom
+
 # Plot from a saved JSON (positions, k, loss params all come from the file)
 uv run python -m routing_py_rebuild plot \
     --json /tmp/run/.../subgraphsdata.json \
@@ -280,10 +285,12 @@ uv run python -m routing_py_rebuild optimize --k 12 --output-dir /tmp/run --prog
 uv run python -m routing_py_rebuild replay --history /tmp/run/.../optimization_history.json --show
 ```
 
-What each frame shows: one square panel per layer (edges colored by
-per-edge same-layer crossings, the `layers_combined.pdf` palette; edges
-that changed layer since the previous frame are drawn heavier with a dark
-outline when only a few changed), a colorbar, and the best loss so far
+What each frame shows: one panel per layer, shaped like the node
+layout's bounding box (height / width clamped to 0.4..1.5, so a 5 × 3
+rectangle gets wide panels), with edges colored by per-edge same-layer
+crossings (the `layers_combined.pdf` palette; edges that changed layer
+since the previous frame are drawn heavier with a dark outline when only
+a few changed); a colorbar; and the best loss so far
 (black; the part still ahead in gray during a replay; the current point
 in red) against the log-scaled evaluation count, over a light band of
 all evaluated losses.
@@ -454,12 +461,19 @@ gives you: `SiNInterconnectionGraph`, `run_optimization`, `make_graph`,
 
 CLI entry: `python -m routing_py_rebuild ...`. Subparsers:
 
-- `optimize` — flags `--k --optimizer {dual_annealing,differential_evolution}
+- `optimize` — flags `--k --positions-json
+  --optimizer {dual_annealing,differential_evolution}
   --maxiter --seed --optimizer-kwargs --output-dir --loss-crossing
   --loss-taper --loss-interlayercrossing --plot-style {visualize}
   --plot-kwargs --no-plot --no-loss-analysis --no-json
   --progress {off,live,record} --progress-kwargs`. Hands everything off
-  to `api.run_optimization`.
+  to `api.run_optimization`. `--positions-json PATH` loads arbitrary
+  node coordinates with `positions.load_positions_json` (the C++
+  `SINIC_POSITIONS_JSON` format, or a saved run's `positions` block);
+  k is the file's node count (default 12 on a square otherwise), a
+  different explicit `--k` exits with an error, and a node order that
+  does not walk the boundary (`positions.perimeter_is_simple`) prints a
+  warning.
 - `plot` — flags `--json (required) --style {visualize} --out-dir
   --plot-kwargs --also-loss-analysis`. No `--k` or positions flags;
   everything comes from the JSON. Hands off to
@@ -586,15 +600,35 @@ Three functions, all small:
 
 #### `positions.py`
 
-Three pure functions returning `dict[int, (x, y)]`:
+Pure functions returning `dict[int, (x, y)]`, with node indices in
+boundary order (the perimeter ring i -> i + 1 is pinned to one layer):
 
 - `distribute_nodes_around_square(nodes_per_side, side_length=4)` —
   even placement on a square; corners excluded.
 - `distribute_nodes_around_rectangle(nodes_on_length, nodes_on_width,
   length=5, width=3)` — same idea for rectangles; `2 * (nodes_on_length
   + nodes_on_width) = k`.
-- `distribute_nodes(shape, ...)` — dispatcher; raises if `shape` isn't
-  `"square"` or `"rectangle"`.
+- `distribute_nodes_around_circle`, `distribute_nodes_around_triangle`,
+  `distribute_nodes_around_polygon`,
+  `distribute_nodes_around_partial_rectangle` (2 or 3 sides).
+- `distribute_nodes(shape, ...)` — dispatcher over `"square"`,
+  `"rectangle"`, `"circle"`, `"triangle"`, `"polygon"`,
+  `"partial_rectangle"`; raises `ValueError` otherwise.
+- `load_positions_json(path)` — arbitrary coordinates from
+  `{"<node>": [x, y], ...}` (canonical integer keys forming `0..k-1`,
+  finite two-number values; same contract as the C++ loader). A file
+  with a `positions` object (`subgraphsdata.json`,
+  `optimization_history.json`) contributes that block. Raises
+  `ValueError` naming the file.
+- `perimeter_is_simple(positions)` — True when walking nodes `0..k-1`
+  and back to 0 never crosses itself, i.e. the indices follow the
+  boundary.
+
+For nodes on a convex outline the crossing structure depends only on
+the node order (two chords cross iff their ends alternate along the
+boundary), so every convex layout with the same order optimizes
+identically; coordinates matter once nodes sit inside the convex hull
+of the others.
 
 Plus one module-level constant, `POSITIONS_12_NODES`, kept for
 backwards-compatible imports of the demo k=12 layout.
@@ -756,8 +790,13 @@ Key behaviors:
 - Every node number is labelled; the label font shrinks with `k`
   (`_label_fontsize`). Graph panels are forced square via
   `set_box_aspect(1)`.
-- Same-side non-adjacent edges bow outward (`arc3`,
-  `_draw_curved_edges`) but endpoints stay anchored on the node:
+- An edge whose straight chord runs through another node (nodes in a
+  row on one straight stretch of the boundary, on any layout) bows
+  toward the interior (`arc3`, `_edge_bends` / `_draw_curved_edges`;
+  bow `CURVE_FACTOR` × (nodes between + 1) / (nodes on that line),
+  "through" meaning within `ON_LINE_TOL` × the layout span). The
+  progress figure draws the same curves (`edge_polylines`). Endpoints
+  stay anchored on the node:
   `_node_size(k)` is the single source for the node marker size and is
   passed to both `draw_networkx_nodes` and every `draw_networkx_edges`
   call so networkx's FancyArrowPatch shrink can't desync (otherwise
@@ -770,7 +809,7 @@ Key behaviors:
 - Raises `ValueError` early if no output directory is resolvable
   (neither `out_dir` nor `plot_data.filepath`).
 
-Tunable module constants: `CURVE_FACTOR`, `XTICK_NBINS`,
+Tunable module constants: `CURVE_FACTOR`, `ON_LINE_TOL`, `XTICK_NBINS`,
 `BAR_WIDTH_FRAC`, `HIST_H_FRAC`, and the figure-scale knobs.
 
 > **2026-05-15 rewrite.** `_visualize` was wholesale-replaced for

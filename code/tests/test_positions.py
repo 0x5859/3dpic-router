@@ -5,6 +5,7 @@ No core.py / crossing interaction (that is M-D, spec §7/§14).
 """
 from __future__ import annotations
 
+import json
 import math
 
 import pytest
@@ -14,6 +15,8 @@ from routing_py_rebuild.positions import (
     distribute_nodes_around_partial_rectangle,
     distribute_nodes_around_polygon,
     distribute_nodes_around_triangle,
+    load_positions_json,
+    perimeter_is_simple,
 )
 
 
@@ -266,3 +269,76 @@ def test_count_validation_rejects_bool_and_non_int():
     # non-int -> ValueError (not TypeError)
     with pytest.raises(ValueError, match="must be an integer"):
         distribute_nodes_around_polygon(4, "x")
+
+
+# ---------------------------------------------------------------------------
+# Arbitrary coordinates from JSON (the C++ SINIC_POSITIONS_JSON format)
+# ---------------------------------------------------------------------------
+def _write(tmp_path, payload) -> str:
+    path = tmp_path / "positions.json"
+    path.write_text(json.dumps(payload))
+    return str(path)
+
+
+def test_load_positions_json_round_trips_any_layout(tmp_path):
+    pos = distribute_nodes("triangle", triangle_nodes_per_side=[3, 2, 4])
+    # written in shuffled key order: the loader returns node order 0..k-1
+    payload = {str(n): list(pos[n]) for n in sorted(pos, reverse=True)}
+    loaded = load_positions_json(_write(tmp_path, payload))
+    assert list(loaded) == list(range(len(pos)))
+    assert loaded == {n: (float(x), float(y)) for n, (x, y) in pos.items()}
+
+
+def test_load_positions_json_takes_a_saved_runs_positions_block(tmp_path):
+    saved = {"General Parameters": {"k": 4}, "Layer_0": {"edges": []},
+             "positions": {"0": [0, 0], "1": [2, 0], "2": [2, 1], "3": [0, 1]}}
+    assert load_positions_json(_write(tmp_path, saved))[2] == (2.0, 1.0)
+
+
+@pytest.mark.parametrize("payload, match", [
+    ([[0, 0], [1, 0]], "non-empty object"),
+    ({}, "non-empty object"),
+    ({"0": [0, 0], "01": [1, 0]}, "canonical"),
+    ({"0": [0, 0], "-1": [1, 0]}, "canonical"),
+    ({"0": [0, 0], "2": [1, 0]}, "contiguous set 0..1"),
+    ({"0": [0, 0], "1": [1]}, "two-number array"),
+    ({"0": [0, 0], "1": [1, "2"]}, "two-number array"),
+    ({"0": [0, 0], "1": [1, True]}, "two-number array"),
+])
+def test_load_positions_json_rejects_malformed_files(tmp_path, payload, match):
+    with pytest.raises(ValueError, match=match):
+        load_positions_json(_write(tmp_path, payload))
+
+
+def test_load_positions_json_rejects_non_finite_and_bad_json(tmp_path):
+    path = tmp_path / "positions.json"
+    path.write_text('{"0": [0, 0], "1": [NaN, 1]}')
+    with pytest.raises(ValueError, match="two-number array"):
+        load_positions_json(path)
+    path.write_text('{"0": [0, 0], "1": [1' + "0" * 400 + ', 1]}')  # overflows a float
+    with pytest.raises(ValueError, match="two-number array"):
+        load_positions_json(path)
+    path.write_text('{"0": [0, 0],')
+    with pytest.raises(ValueError, match="malformed JSON"):
+        load_positions_json(path)
+
+
+@pytest.mark.parametrize("pos", [
+    distribute_nodes("square", nodes_per_side=3),
+    distribute_nodes("rectangle", nodes_on_length=4, nodes_on_width=2),
+    distribute_nodes("circle", k=9),
+    distribute_nodes("triangle", triangle_nodes_per_side=4),
+    distribute_nodes("polygon", polygon_n_sides=6, polygon_nodes_per_side=2),
+    distribute_nodes("partial_rectangle", side_counts={"top": 3, "right": 2, "bottom": 3}),
+], ids=["square", "rectangle", "circle", "triangle", "hexagon", "partial_rectangle"])
+def test_generators_number_nodes_along_the_boundary(pos):
+    assert perimeter_is_simple(pos)
+
+
+def test_perimeter_is_simple_flags_a_crossing_node_order():
+    # A 2 x 3 grid of ports numbered row by row, not around the outline.
+    rows = {0: (0, 0), 1: (1, 0), 2: (2, 0), 3: (0, 1), 4: (1, 1), 5: (2, 1)}
+    assert not perimeter_is_simple(rows)
+    around = {0: (0, 0), 1: (1, 0), 2: (2, 0), 3: (2, 1), 4: (1, 1), 5: (0, 1)}
+    assert perimeter_is_simple(around)
+    assert not perimeter_is_simple({0: (0, 0), 1: (1, 0)})

@@ -53,6 +53,8 @@ from .positions import (
     distribute_nodes_around_rectangle,
     distribute_nodes_around_square,
     distribute_nodes_around_triangle,
+    load_positions_json,
+    perimeter_is_simple,
 )
 from .progress import PROGRESS_MODES, ProgressOptions, ProgressTracker
 from .statistics import (
@@ -101,6 +103,8 @@ __all__ = [
     "distribute_nodes_around_polygon",
     "distribute_nodes_around_partial_rectangle",
     "POSITIONS_12_NODES",
+    "load_positions_json",
+    "perimeter_is_simple",
     "DEFAULT_COLORMAP",
     "NODE_FILL_COLOR",
     "get_colormap",

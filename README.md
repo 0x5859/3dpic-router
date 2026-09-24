@@ -89,6 +89,35 @@ frame is drawn, capped at about 20% of the run time. Options such as the redraw 
 replay formats, frame cap, fps, and dpi go in `--progress-kwargs` / `progress_kwargs`
 (for example `'{"interval": 1.0, "formats": ["gif"]}'`).
 
+### Boundary layouts and arbitrary node coordinates
+
+Nodes default to a square with k/4 per side. `routing_py_rebuild.positions` also builds
+rectangles, circles, triangles, regular polygons, and two or three sides of a rectangle
+(`distribute_nodes(shape, ...)`). Any other coordinates go in through `positions=` (library) or
+`--positions-json` (CLI):
+
+```bash
+# layout.json: {"0": [1.4, 0.0], "1": [2.3, 0.0], ..., "11": [0.0, 1.5]}
+uv run python -m routing_py_rebuild optimize --positions-json layout.json --maxiter 200 \
+    --output-dir /tmp/run --progress record
+```
+
+The file uses the C++ `SINIC_POSITIONS_JSON` format: keys `0 .. k-1`, each an `[x, y]` pair, and k
+is taken from the file. A saved `subgraphsdata.json` or `optimization_history.json` also works,
+which reuses that run's layout. Number the nodes along the boundary, because the perimeter ring
+(node i to i + 1, and k - 1 to 0) is pinned to one layer. The command warns when walking the nodes
+in index order crosses itself. The plots follow the layout: routing panels take its aspect ratio,
+and links that run along a straight stretch of the boundary through other nodes are drawn as
+inward arcs.
+
+When every node lies on a convex outline, two straight links cross exactly when their end nodes
+alternate along the boundary. The optimization then depends only on the node order: a square, a
+circle, or any convex chip outline with the same order gives the same result. The coordinates
+change the problem when some nodes sit inside the convex hull of the others, for example on a
+notched outline. Known issue: layouts with three or more nodes on a slanted straight side, such as
+the triangle, currently miss the convex shortcut because of floating-point rounding, so their
+crossings are counted differently.
+
 ## C++ quickstart
 
 ```bash

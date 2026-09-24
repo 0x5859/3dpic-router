@@ -3,7 +3,8 @@
 Four subcommands:
 
   optimize   Run an optimizer end-to-end (graph → solve → JSON → plots).
-             ``--progress live|record`` also shows the optimization process.
+             ``--progress live|record`` also shows the optimization process;
+             ``--positions-json`` places the nodes at arbitrary coordinates.
   plot       Reload a saved subgraph JSON and render a chosen style.
   report     Render convergence + timings PNGs from a ``run_report.json``.
   replay     Re-render / re-open a recorded ``optimization_history.json``.
@@ -20,6 +21,7 @@ from .api import run_optimization
 from .plotting import plot_from_json, render_progress_replay, show_progress_replay
 from .plotting.convergence import plot_convergence, plot_timings
 from .plotting.progress_replay import load_progress_data
+from .positions import load_positions_json, perimeter_is_simple
 
 
 def _parse_kwargs(s: str | None) -> dict:
@@ -30,7 +32,14 @@ def _parse_kwargs(s: str | None) -> dict:
 
 def _add_optimize_parser(sub):
     p = sub.add_parser("optimize", help="Run optimizer end-to-end")
-    p.add_argument("--k", type=int, default=12)
+    p.add_argument("--k", type=int, default=None,
+                   help="Number of nodes (default 12, on a square with k/4 per "
+                        "side; with --positions-json, the file's node count).")
+    p.add_argument("--positions-json", default=None, metavar="PATH",
+                   help='Arbitrary node coordinates {"<node>": [x, y], ...}, keys '
+                        "0..k-1 numbered along the boundary (the C++ "
+                        "SINIC_POSITIONS_JSON format). A saved subgraphsdata.json "
+                        "or optimization_history.json also works (its positions).")
     p.add_argument("--optimizer", default="dual_annealing",
                    choices=[
                        "dual_annealing",
@@ -166,9 +175,29 @@ def _build_parser():
     return parser
 
 
+def _resolve_positions(args) -> tuple[int, dict | None]:
+    """``(k, positions)`` from ``--k`` / ``--positions-json``."""
+    if not args.positions_json:
+        return (12 if args.k is None else args.k), None
+    try:
+        positions = load_positions_json(args.positions_json)
+    except (OSError, ValueError) as exc:
+        sys.exit(f"--positions-json: {exc}")
+    if args.k is not None and args.k != len(positions):
+        sys.exit(f"--k {args.k} does not match the {len(positions)} nodes in "
+                 f"{args.positions_json}; drop --k or fix the file.")
+    if not perimeter_is_simple(positions):
+        print(f"warning: walking the nodes of {args.positions_json} in index order "
+              "crosses itself; the perimeter ring (i -> i+1) is pinned to one layer, "
+              "so number the nodes along the boundary.", file=sys.stderr)
+    return len(positions), positions
+
+
 def _run_optimize(args):
+    k, positions = _resolve_positions(args)
     res = run_optimization(
-        k=args.k,
+        k=k,
+        positions=positions,
         optimizer=args.optimizer,
         maxiter=args.maxiter,
         seed=args.seed,

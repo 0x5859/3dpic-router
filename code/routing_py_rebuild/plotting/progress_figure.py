@@ -10,10 +10,11 @@ loss, and round-trips through ``optimization_history.json``.
 
 :class:`ProgressFigure` draws a frame at publication scale — 7 pt
 Arial-stack text, 0.5 pt lines, a centimetre layout, no figure title
-(see :mod:`._style`): one square routing panel per layer (edges colored
-by crossings like ``layers_combined.pdf``; edges that changed layer since
-the previous frame drawn heavier with a dark outline, when only a few
-did) above the best-loss-so-far curve on a log evaluation axis. Artists
+(see :mod:`._style`): one routing panel per layer, shaped like the
+layout's bounding box (edges colored by crossings like
+``layers_combined.pdf``; edges that changed layer since the previous
+frame drawn heavier with a dark outline, when only a few did) above the
+best-loss-so-far curve on a log evaluation axis. Artists
 are created once and updated in place, so the live view and the replay
 renderer redraw quickly.
 
@@ -42,7 +43,7 @@ from matplotlib.ticker import FuncFormatter, LogLocator, MaxNLocator
 
 from ._colormap import CMAP_LOWER, CMAP_SCALE, CMAP_UPPER, DEFAULT_COLORMAP, NODE_FILL_COLOR
 from ._style import FONT_SIZE, LINE_WIDTH, apply_rcparams, style_axes, style_colorbar
-from .layers import CURVE_FACTOR, _label_fontsize, _node_size, _side_info_factory
+from .layers import _edge_bends, _label_fontsize, _node_size
 
 HISTORY_FILENAME = "optimization_history.json"
 HISTORY_SCHEMA_VERSION = "1.0"
@@ -305,32 +306,18 @@ def _validate_history(payload: dict[str, Any], *, source: str) -> None:
 # ---------------------------------------------------------------------------
 def edge_polylines(positions, edges) -> list[np.ndarray]:
     """One polyline per edge, matching the ``visualize`` style's geometry:
-    straight chords, except same-side non-adjacent pairs, which bow as the
-    ``arc3`` quadratic Bézier :func:`layers._draw_curved_edges` draws."""
-    side_info, _ = _side_info_factory(positions)
-    side_nodes: dict[str, list[tuple[float, int]]] = {
-        "top": [], "right": [], "bottom": [], "left": [],
-    }
-    for n in positions:
-        s, coord = side_info(n)
-        side_nodes[s].append((coord, n))
-    rank: dict[int, int] = {}
-    for s in side_nodes:
-        side_nodes[s].sort()
-        rank.update({n: i for i, (_c, n) in enumerate(side_nodes[s])})
-
+    straight chords, except chords that run along the boundary through
+    other nodes, which bow inward as the ``arc3`` quadratic Bézier
+    :func:`layers._draw_curved_edges` draws (see :func:`layers._edge_bends`)."""
+    edges = list(edges)
     t = np.linspace(0.0, 1.0, _ARC_POINTS)[:, None]
     polylines = []
-    for u, v in edges:
+    for (u, v), rad in zip(edges, _edge_bends(positions, edges), strict=True):
         p0 = np.asarray(positions[u], dtype=float)
         p2 = np.asarray(positions[v], dtype=float)
-        side_u, _ = side_info(u)
-        side_v, _ = side_info(v)
-        diff = abs(rank[u] - rank[v])
-        if side_u != side_v or diff <= 1:
+        if rad == 0.0:
             polylines.append(np.stack([p0, p2]))
             continue
-        rad = CURVE_FACTOR * (diff / len(side_nodes[side_u]))
         d = p2 - p0
         ctrl = (p0 + p2) / 2.0 + rad * np.array([d[1], -d[0]])
         polylines.append((1 - t) ** 2 * p0 + 2 * (1 - t) * t * ctrl + t ** 2 * p2)
@@ -397,6 +384,7 @@ _STATUS_ROW_CM = 0.45   # status line above the loss panel
 _PANEL_GAP_CM = 0.3     # routing panels to status line
 _TOP_CM = 0.1
 _MIN_PANEL_CM = 4.5
+_ASPECT_RANGE = (0.4, 1.5)  # routing-panel height / width, from the layout's bounding box
 
 
 class ProgressFigure:
@@ -439,13 +427,23 @@ class ProgressFigure:
         k, L = data.k, data.L
         self._paths = edge_polylines(data.positions, data.edges)
 
+        # Routing panels take the layout's shape (a 5 x 3 rectangle gets
+        # wide panels) instead of letterboxing it in a square.
+        xs = np.array([p[0] for p in data.positions.values()])
+        ys = np.array([p[1] for p in data.positions.values()])
+        span = max(xs.max() - xs.min(), ys.max() - ys.min(), 1e-9)
+        margin = 0.09 * span
+        aspect = (ys.max() - ys.min() + 2 * margin) / (xs.max() - xs.min() + 2 * margin)
+        aspect = min(max(aspect, _ASPECT_RANGE[0]), _ASPECT_RANGE[1])
+
         scale = min(2.2, max(1.0, math.sqrt(k / 12.0)))
         fixed = 2 * _SIDE_CM + _CBAR_BLOCK_CM + (L - 1) * _GAP_CM
         panel = max(_MIN_PANEL_CM * scale, (_WIDTH_CM * scale - fixed) / L)
+        panel_h = panel * aspect
         width = fixed + L * panel
         loss_y = footer_cm + _LOSS_BOTTOM_CM
         panels_y = loss_y + _LOSS_H_CM + _STATUS_ROW_CM + _PANEL_GAP_CM
-        height = panels_y + panel + _LABEL_ROW_CM + _TOP_CM
+        height = panels_y + panel_h + _LABEL_ROW_CM + _TOP_CM
         right = _SIDE_CM + L * panel + (L - 1) * _GAP_CM  # right edge of the panels
         self.footer_cm = footer_cm
 
@@ -461,11 +459,11 @@ class ProgressFigure:
             return (x / width, y / height, w / width, h / height)
 
         self.layer_axes = [
-            fig.add_axes(rect(_SIDE_CM + j * (panel + _GAP_CM), panels_y, panel, panel))
+            fig.add_axes(rect(_SIDE_CM + j * (panel + _GAP_CM), panels_y, panel, panel_h))
             for j in range(L)
         ]
-        self.cax = fig.add_axes(rect(right + 0.3, panels_y + 0.15 * panel,
-                                     _CBAR_W_CM, 0.7 * panel))
+        self.cax = fig.add_axes(rect(right + 0.3, panels_y + 0.15 * panel_h,
+                                     _CBAR_W_CM, 0.7 * panel_h))
         self.loss_ax = fig.add_axes(rect(_LOSS_LEFT_CM, loss_y, right - _LOSS_LEFT_CM, _LOSS_H_CM))
 
         # No figure title: progress goes in a status line above the loss
@@ -481,13 +479,9 @@ class ProgressFigure:
 
         # Layer panels: nodes + labels are static; per frame only the two
         # edge collections change (outlines of moved edges under, edges over).
-        xs = np.array([p[0] for p in data.positions.values()])
-        ys = np.array([p[1] for p in data.positions.values()])
-        span = max(xs.max() - xs.min(), ys.max() - ys.min(), 1e-9)
-        margin = 0.09 * span
         ns = _node_size(k)
         fs = _label_fontsize(k)
-        label_top = (panels_y + panel + _LABEL_ROW_CM) / height
+        label_top = (panels_y + panel_h + _LABEL_ROW_CM) / height
         self._edge_lcs: list[LineCollection] = []
         self._outline_lcs: list[LineCollection] = []
         self._panel_counts = []
