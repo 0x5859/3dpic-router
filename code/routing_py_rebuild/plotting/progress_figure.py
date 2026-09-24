@@ -8,13 +8,14 @@ per-edge layer assignment and the per-edge same-layer crossing counts.
 (positions, edge list) and a bounded min/max envelope of every evaluated
 loss, and round-trips through ``optimization_history.json``.
 
-:class:`ProgressFigure` draws a frame: one square routing panel per
-layer (edges colored by crossings like ``layers_combined.pdf``; edges
-that changed layer since the previous frame drawn thick with a dark
-outline, when only a few did) above the best-loss-so-far curve on a log
-evaluation axis.
-Artists are created once and updated in place, so the live view and the
-replay renderer redraw quickly.
+:class:`ProgressFigure` draws a frame at publication scale — 7 pt
+Arial-stack text, 0.5 pt lines, a centimetre layout, no figure title
+(see :mod:`._style`): one square routing panel per layer (edges colored
+by crossings like ``layers_combined.pdf``; edges that changed layer since
+the previous frame drawn heavier with a dark outline, when only a few
+did) above the best-loss-so-far curve on a log evaluation axis. Artists
+are created once and updated in place, so the live view and the replay
+renderer redraw quickly.
 
 Like the rest of :mod:`plotting`, nothing here imports :mod:`core` or
 touches a graph instance — the data is the contract.
@@ -37,10 +38,10 @@ from matplotlib.collections import LineCollection
 from matplotlib.colors import ListedColormap, Normalize
 from matplotlib.figure import Figure
 from matplotlib.patches import Patch
-from matplotlib.ticker import FuncFormatter, LogLocator, MaxNLocator, NullFormatter
+from matplotlib.ticker import FuncFormatter, LogLocator, MaxNLocator
 
 from ._colormap import CMAP_LOWER, CMAP_SCALE, CMAP_UPPER, DEFAULT_COLORMAP, NODE_FILL_COLOR
-from ._style import apply_rcparams
+from ._style import FONT_SIZE, LINE_WIDTH, apply_rcparams, style_axes, style_colorbar
 from .layers import CURVE_FACTOR, _label_fontsize, _node_size, _side_info_factory
 
 HISTORY_FILENAME = "optimization_history.json"
@@ -50,19 +51,29 @@ _HISTORY_SCHEMA_PATH = (
     Path(__file__).resolve().parents[2] / "schema" / "optimization_history.schema.json"
 )
 
-# Screen-oriented styling (live window / GIF / HTML player), heavier than
-# the 0.5 pt publication lines of ``layers_combined.pdf``.
-EDGE_WIDTH = 1.0         # pt — edges that kept their layer
-MOVED_EDGE_WIDTH = 2.4   # pt — edges that changed layer since the previous frame
-MOVED_OUTLINE = "#262626"
+# Line weights follow ``layers_combined.pdf`` (0.5 pt); only the moved-edge
+# highlight is heavier, drawn over a thin dark outline.
+EDGE_WIDTH = LINE_WIDTH          # pt — edges that kept their layer
+MOVED_EDGE_WIDTH = 1.25          # pt — edges that changed layer since the previous frame
+MOVED_OUTLINE_WIDTH = MOVED_EDGE_WIDTH + 0.7
+MOVED_OUTLINE = "#1a1a1a"
 # Outline moved edges only when few moved: a reshuffle of dozens of edges
-# (annealing jumps) would bury the panel in outlines; titles keep the count.
+# (annealing jumps) would bury the panel in outlines; the labels keep the count.
 HIGHLIGHT_MAX_MOVED = 12
 HIGHLIGHT_MAX_FRACTION = 0.08
-BEST_COLOR = "#c0392b"
-ENVELOPE_COLOR = "#aab7cb"
-ENVELOPE_ALPHA = 0.35
+BEST_COLOR = "k"                 # best-so-far line: one series, plain black
+CONTEXT_COLOR = "#9a9a9a"        # replay: the part of the curve still ahead
+MARKER_COLOR = "#B2182B"         # the frame's point — the one accent color
+ENVELOPE_COLOR = "#C1DCF3"       # light blue
+ENVELOPE_ALPHA = 0.45
+MUTED = "#555555"                # secondary text (counts, run label)
 _ARC_POINTS = 24
+
+# Raster resolutions. Frames are screen / animation output; the PNG still
+# uses the 450 ppi publication default.
+LIVE_WINDOW_DPI = 120
+FRAME_DPI = 150
+STILL_DPI = 450
 
 
 @lru_cache(maxsize=1)
@@ -147,15 +158,16 @@ class ProgressData:
     def max_crossings(self) -> int:
         return max((int(f.crossings.max(initial=0)) for f in self.frames), default=0)
 
-    def title(self) -> str:
+    def run_label(self) -> str:
+        """Short run identity, e.g. ``dual_annealing, k = 12, L = 2, seed 5859``."""
         parts = []
         if self.run.get("optimizer"):
             parts.append(str(self.run["optimizer"]))
-        parts.append(f"k={self.k}")
-        parts.append(f"L={self.L}")
+        parts.append(f"k = {self.k}")
+        parts.append(f"L = {self.L}")
         if self.run.get("seed") is not None:
             parts.append(f"seed {self.run['seed']}")
-        return "Routing optimization — " + " · ".join(parts)
+        return ", ".join(parts)
 
     # -- JSON ------------------------------------------------------------
     def to_json_dict(self) -> dict[str, Any]:
@@ -352,6 +364,11 @@ def _fmt_count(v, _pos=None) -> str:
     return f"{int(round(v)):,}"
 
 
+def _signed_pct(value: float) -> str:
+    """``+1.0%`` / ``−34.1%`` with a typographic minus sign."""
+    return f"{value:+.1f}%".replace("-", "\u2212")
+
+
 def _rolling(values: np.ndarray, op, radius: int = 2) -> np.ndarray:
     """Centered rolling ``op`` (np.fmin / np.fmax) over ``2 * radius + 1``
     buckets — turns the per-bucket extremes into a smooth envelope."""
@@ -360,6 +377,26 @@ def _rolling(values: np.ndarray, op, radius: int = 2) -> np.ndarray:
         out[s:] = op(out[s:], values[:-s])
         out[:-s] = op(out[:-s], values[s:])
     return out
+
+
+# Fixed layout in centimetres. The width is a double-column 17.8 cm at
+# k <= 12 and grows with sqrt(k / 12) (like ``layers_combined.pdf``) so
+# dense graphs keep readable panels; nothing moves between frames.
+_CM = 1 / 2.54
+_WIDTH_CM = 17.8
+_SIDE_CM = 0.3          # outer left / right margin
+_GAP_CM = 0.35          # between layer panels
+_CBAR_BLOCK_CM = 1.45   # colorbar with its tick labels and label
+_CBAR_W_CM = 0.22
+_LABEL_ROW_CM = 0.75    # two-line label above each routing panel
+_LINE_CM = 0.3          # 7 pt line pitch
+_LOSS_LEFT_CM = 1.3     # loss-panel y tick labels + y label
+_LOSS_BOTTOM_CM = 0.85  # loss-panel x tick labels + x label
+_LOSS_H_CM = 3.4
+_STATUS_ROW_CM = 0.45   # status line above the loss panel
+_PANEL_GAP_CM = 0.3     # routing panels to status line
+_TOP_CM = 0.1
+_MIN_PANEL_CM = 4.5
 
 
 class ProgressFigure:
@@ -371,7 +408,7 @@ class ProgressFigure:
         Geometry (positions / edges / k / L) is read at construction;
         frames are passed to :meth:`draw`.
     dpi : float
-        Figure dpi (the figure size itself scales with ``k`` and ``L``).
+        Raster resolution; the physical size comes from the cm layout.
     pyplot : bool
         Create the figure through :mod:`matplotlib.pyplot` so it gets a
         GUI window (live view / interactive replay). Otherwise a bare
@@ -380,61 +417,67 @@ class ProgressFigure:
     context : bool
         Draw the complete best-so-far curve faintly behind the progressing
         one (replay: you see where the run is heading).
-    footer : float
-        Inches kept free below the loss panel (interactive replay widgets).
+    annotate : bool
+        Show the status line and the run label (animation frames). Stills
+        for a paper leave them to the caption.
+    footer_cm : float
+        Space kept free below the loss panel (interactive replay widgets).
     """
 
     def __init__(
         self,
         data: ProgressData,
         *,
-        dpi: float = 100,
+        dpi: float = FRAME_DPI,
         pyplot: bool = False,
         context: bool = False,
-        footer: float = 0.0,
+        annotate: bool = True,
+        footer_cm: float = 0.0,
     ):
         apply_rcparams()
         self.data = data
         k, L = data.k, data.L
         self._paths = edge_polylines(data.positions, data.edges)
 
-        # Fixed layout in inches (no constrained_layout): panel geometry
-        # must not jitter between frames when the title texts change.
         scale = min(2.2, max(1.0, math.sqrt(k / 12.0)))
-        panel = 3.3 * scale               # per-layer panel edge
-        cbar_w, side = 0.9, 0.2
-        loss_left, loss_bottom, loss_h = 0.75, footer + 0.5, 1.65
-        panels_bottom = loss_bottom + loss_h + 0.45
-        panels_top = panels_bottom + panel
-        fig_w = L * panel + cbar_w + 2 * side
-        fig_h = panels_top + 0.75         # title + status lines
+        fixed = 2 * _SIDE_CM + _CBAR_BLOCK_CM + (L - 1) * _GAP_CM
+        panel = max(_MIN_PANEL_CM * scale, (_WIDTH_CM * scale - fixed) / L)
+        width = fixed + L * panel
+        loss_y = footer_cm + _LOSS_BOTTOM_CM
+        panels_y = loss_y + _LOSS_H_CM + _STATUS_ROW_CM + _PANEL_GAP_CM
+        height = panels_y + panel + _LABEL_ROW_CM + _TOP_CM
+        right = _SIDE_CM + L * panel + (L - 1) * _GAP_CM  # right edge of the panels
+        self.footer_cm = footer_cm
+
         if pyplot:
-            self.fig = plt.figure(figsize=(fig_w, fig_h), dpi=dpi)
+            self.fig = plt.figure(figsize=(width * _CM, height * _CM), dpi=dpi)
         else:
-            self.fig = Figure(figsize=(fig_w, fig_h), dpi=dpi)
+            self.fig = Figure(figsize=(width * _CM, height * _CM), dpi=dpi)
             FigureCanvasAgg(self.fig)
         fig = self.fig
         fig.patch.set_facecolor("white")
 
-        right = 1 - (cbar_w + side) / fig_w
-        gs = fig.add_gridspec(
-            1, L, left=side / fig_w, right=right,
-            bottom=panels_bottom / fig_h, top=panels_top / fig_h, wspace=0.08,
-        )
-        self.layer_axes = [fig.add_subplot(gs[0, j]) for j in range(L)]
-        self.cax = fig.add_axes((
-            right + 0.25 / fig_w, (panels_bottom + 0.35) / fig_h,
-            0.14 / fig_w, (panel - 0.75) / fig_h,
-        ))
-        self.loss_ax = fig.add_axes((
-            loss_left / fig_w, loss_bottom / fig_h,
-            right - loss_left / fig_w, loss_h / fig_h,
-        ))
+        def rect(x, y, w, h):  # cm → figure fraction
+            return (x / width, y / height, w / width, h / height)
 
-        self.title_text = fig.text(0.5 * right, 1 - 0.18 / fig_h, data.title(),
-                                   ha="center", va="top", fontsize=9, fontweight="bold")
-        self.status_text = fig.text(0.5 * right, 1 - 0.45 / fig_h, "", ha="center", va="top",
-                                    fontsize=8, color="#333333")
+        self.layer_axes = [
+            fig.add_axes(rect(_SIDE_CM + j * (panel + _GAP_CM), panels_y, panel, panel))
+            for j in range(L)
+        ]
+        self.cax = fig.add_axes(rect(right + 0.3, panels_y + 0.15 * panel,
+                                     _CBAR_W_CM, 0.7 * panel))
+        self.loss_ax = fig.add_axes(rect(_LOSS_LEFT_CM, loss_y, right - _LOSS_LEFT_CM, _LOSS_H_CM))
+
+        # No figure title: progress goes in a status line above the loss
+        # panel, the run identity in a muted note under its right end.
+        self.status_text = fig.text(
+            _LOSS_LEFT_CM / width, (loss_y + _LOSS_H_CM + 0.12) / height, "",
+            ha="left", va="bottom", fontsize=FONT_SIZE, visible=annotate,
+        )
+        self.run_text = fig.text(
+            right / width, (footer_cm + 0.12) / height, data.run_label(),
+            ha="right", va="bottom", fontsize=FONT_SIZE, color=MUTED, visible=annotate,
+        )
 
         # Layer panels: nodes + labels are static; per frame only the two
         # edge collections change (outlines of moved edges under, edges over).
@@ -444,16 +487,16 @@ class ProgressFigure:
         margin = 0.09 * span
         ns = _node_size(k)
         fs = _label_fontsize(k)
+        label_top = (panels_y + panel + _LABEL_ROW_CM) / height
         self._edge_lcs: list[LineCollection] = []
         self._outline_lcs: list[LineCollection] = []
-        self._panel_titles = []
-        for ax in self.layer_axes:
+        self._panel_counts = []
+        for j, ax in enumerate(self.layer_axes):
             ax.set_xlim(xs.min() - margin, xs.max() + margin)
             ax.set_ylim(ys.min() - margin, ys.max() + margin)
             ax.set_aspect("equal")
             ax.axis("off")
-            outline = LineCollection([], colors=MOVED_OUTLINE,
-                                     linewidths=MOVED_EDGE_WIDTH + 1.6,
+            outline = LineCollection([], colors=MOVED_OUTLINE, linewidths=MOVED_OUTLINE_WIDTH,
                                      capstyle="round", zorder=1)
             edges = LineCollection([], linewidths=EDGE_WIDTH, capstyle="round", zorder=2)
             ax.add_collection(outline)
@@ -463,7 +506,13 @@ class ProgressFigure:
             ax.scatter(xs, ys, s=ns, c=NODE_FILL_COLOR, edgecolors="none", zorder=3)
             for n, (x, y) in data.positions.items():
                 ax.text(x, y, str(n), ha="center", va="center", fontsize=fs, zorder=4)
-            self._panel_titles.append(ax.set_title("", fontsize=8, pad=4))
+            x0 = (_SIDE_CM + j * (panel + _GAP_CM)) / width
+            name = f"Layer {j}" + (" (coupler)" if j == data.edge_coupler_layer else "")
+            fig.text(x0, label_top, name, ha="left", va="top", fontsize=FONT_SIZE)
+            self._panel_counts.append(fig.text(
+                x0, label_top - _LINE_CM / height, "", ha="left", va="top",
+                fontsize=FONT_SIZE, color=MUTED,
+            ))
 
         # Colorbar over the same [CMAP_LOWER, CMAP_UPPER] window that
         # ``crossings_color`` applies, so the bar matches the edges.
@@ -472,9 +521,8 @@ class ProgressFigure:
         bar_cmap = ListedColormap(DEFAULT_COLORMAP(np.linspace(CMAP_LOWER, CMAP_UPPER, 256)))
         self._mappable = ScalarMappable(norm=Normalize(0, 1), cmap=bar_cmap)
         self._cbar = fig.colorbar(self._mappable, cax=self.cax)
-        self._cbar.set_label("crossings per edge", fontsize=7)
-        self._cbar.ax.yaxis.set_major_locator(MaxNLocator(nbins=6, integer=True))
-        self._cbar.ax.tick_params(labelsize=7)
+        style_colorbar(self._cbar, label="Crossings per edge")
+        self._cbar.ax.yaxis.set_major_locator(MaxNLocator(nbins=5, integer=True))
         self._vmax: float | None = None
 
         # Loss panel: log evaluation axis — improvements cluster early.
@@ -485,26 +533,25 @@ class ProgressFigure:
             bx, by = data.best_curve()
             end = max(float(data.evaluations), float(bx[-1]))
             lax.plot(np.append(bx, end), np.append(by, by[-1]), drawstyle="steps-post",
-                     color=BEST_COLOR, alpha=0.25, linewidth=1.2, zorder=2)
+                     color=CONTEXT_COLOR, linewidth=LINE_WIDTH, zorder=2)
         self._best_line, = lax.plot([], [], drawstyle="steps-post", color=BEST_COLOR,
-                                    linewidth=1.6, zorder=3, label="best loss so far")
-        self._marker, = lax.plot([], [], "o", color=BEST_COLOR, markersize=5,
-                                 markeredgecolor="white", markeredgewidth=0.8, zorder=4)
-        self._now_line = lax.axvline(1, color="#555555", linewidth=0.6, linestyle=":", zorder=1)
-        lax.set_xlabel("loss evaluations (log scale)", fontsize=7)
-        lax.set_ylabel("loss", fontsize=7)
+                                    linewidth=LINE_WIDTH, zorder=3, label="Best so far")
+        self._marker, = lax.plot([], [], "o", color=MARKER_COLOR, markersize=4,
+                                 markeredgecolor="white", markeredgewidth=0.5, zorder=4)
+        lax.set_xlabel("Evaluations", fontsize=FONT_SIZE)
+        lax.set_ylabel("Mean edge loss (dB)", fontsize=FONT_SIZE)
         lax.xaxis.set_major_locator(LogLocator(base=10))
         lax.xaxis.set_major_formatter(FuncFormatter(_fmt_count))
-        lax.xaxis.set_minor_formatter(NullFormatter())
-        lax.grid(True, which="major", linewidth=0.3, alpha=0.5)
-        lax.tick_params(labelsize=7)
+        lax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+        style_axes(lax)
         lax.legend(
             handles=[
                 self._best_line,
-                Patch(facecolor=ENVELOPE_COLOR, alpha=ENVELOPE_ALPHA,
-                      label="evaluated losses (range)"),
+                Patch(facecolor=ENVELOPE_COLOR, alpha=ENVELOPE_ALPHA, linewidth=0,
+                      label="Evaluated (range)"),
             ],
-            loc="upper right", fontsize=7, frameon=False,
+            loc="upper right", fontsize=FONT_SIZE, frameon=False, handlelength=1.6,
+            borderaxespad=0.4,
         )
 
     # ------------------------------------------------------------------
@@ -540,7 +587,6 @@ class ProgressFigure:
         cross = np.asarray(frame.crossings)
         moved = (layers != prev.layers) if prev is not None else np.zeros(len(layers), bool)
         highlight = moved.sum() <= max(HIGHLIGHT_MAX_MOVED, HIGHLIGHT_MAX_FRACTION * len(layers))
-        ecl = self.data.edge_coupler_layer
         for j in range(self.data.L):
             on = np.flatnonzero(layers == j)
             on = np.concatenate([on[~moved[on]], on[moved[on]]])  # moved edges on top
@@ -551,11 +597,10 @@ class ProgressFigure:
             lc.set_color(self._edge_colors(cross[on]))
             lc.set_linewidth(np.where(outlined, MOVED_EDGE_WIDTH, EDGE_WIDTH))
             self._outline_lcs[j].set_segments([self._paths[i] for i in on[outlined]])
-            label = f"Layer {j}" + (" (coupler)" if j == ecl else "")
-            text = f"{label} · {len(on)} edges · {int(cross[on].sum()) // 2} crossings"
+            counts = f"{len(on)} edges, {int(cross[on].sum()) // 2} crossings"
             if is_moved.any():
-                text += f" · {int(is_moved.sum())} moved in"
-            self._panel_titles[j].set_text(text)
+                counts += f", {int(is_moved.sum())} moved in"
+            self._panel_counts[j].set_text(counts)
 
         self.status_text.set_text(status)
         self._draw_curve(curve)
@@ -572,7 +617,6 @@ class ProgressFigure:
             self._marker.set_data([curve.marker[0]], [curve.marker[1]])
         else:
             self._marker.set_data([], [])
-        self._now_line.set_xdata([x_now, x_now])
 
         if self._env_artist is not None:
             self._env_artist.remove()
@@ -582,7 +626,7 @@ class ProgressFigure:
             if len(ex):
                 self._env_artist = lax.fill_between(
                     ex, _rolling(lo, np.fmin), _rolling(hi, np.fmax), step="post",
-                    color=ENVELOPE_COLOR, alpha=ENVELOPE_ALPHA, linewidth=0, zorder=0,
+                    color=ENVELOPE_COLOR, alpha=ENVELOPE_ALPHA, linewidth=0, zorder=1,
                 )
 
         x_max = curve.x_max if curve.x_max is not None else max(10.0, x_now * 1.3)
@@ -600,13 +644,13 @@ class ProgressFigure:
 
 def frame_status(frame: ProgressFrame, *, index: int, total: int,
                  evaluations: int, initial_loss: float) -> str:
-    """One-line status for a replay frame."""
+    """Status line for a replay frame (sentence case, 7 pt)."""
     rel = (frame.loss - initial_loss) / abs(initial_loss) * 100 if initial_loss else 0.0
-    head = "final result" if frame.final else f"improvement {index + 1}/{total}"
-    change = "initial" if index == 0 and not frame.final else f"{rel:+.1f}% vs. start"
+    head = "Final result" if frame.final else f"Improvement {index + 1} of {total}"
+    change = "initial" if index == 0 and not frame.final else _signed_pct(rel)
     return (
-        f"{head} · evaluation {frame.eval_index + 1:,}/{evaluations:,} · "
-        f"loss {frame.loss:.6g} ({change}) · t = {frame.wall_ms / 1000:.2f} s"
+        f"{head}, evaluation {frame.eval_index + 1:,} of {evaluations:,}, "
+        f"loss {frame.loss:.5g} dB ({change}), {frame.wall_ms / 1000:.2f} s"
     )
 
 

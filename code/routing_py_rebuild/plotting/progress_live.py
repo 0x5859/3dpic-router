@@ -27,7 +27,16 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .progress_figure import CurveView, EvalEnvelope, ProgressData, ProgressFigure, ProgressFrame
+from .progress_figure import (
+    FRAME_DPI,
+    LIVE_WINDOW_DPI,
+    CurveView,
+    EvalEnvelope,
+    ProgressData,
+    ProgressFigure,
+    ProgressFrame,
+    _signed_pct,
+)
 
 LIVE_IMAGE_FILENAME = "optimization_live.png"
 WINDOW_TITLE = "3D-PIC router — optimization progress"
@@ -63,12 +72,13 @@ class LiveState:
 
 
 def live_status(state: LiveState) -> str:
+    """Status line for the live view (sentence case, 7 pt)."""
     start = float(state.best_y[0]) if len(state.best_y) else state.frame.loss
     rel = (state.frame.loss - start) / abs(start) * 100 if start else 0.0
-    head = "finished" if state.done else "running"
+    head = "Finished" if state.done else "Running"
     return (
-        f"{head} · eval {state.evaluations:,} · best loss {state.frame.loss:.6g} "
-        f"({rel:+.1f}% vs. start) · {state.improvements} improvements · "
+        f"{head}, {state.evaluations:,} evaluations, best loss {state.frame.loss:.5g} dB "
+        f"({_signed_pct(rel)}), {state.improvements} improvements, "
         f"{state.elapsed_ms / 1000:.1f} s"
     )
 
@@ -83,6 +93,9 @@ class LiveProgressView:
     out_dir : str | None
         Directory for ``optimization_live.png`` in ``"file"`` mode; a
         temporary directory is used when None.
+    dpi : float | None
+        Resolution; None = ``LIVE_WINDOW_DPI`` for a window, ``FRAME_DPI``
+        for the notebook / file image.
     mode : str | None
         Force a display mode (tests); default :func:`live_display_mode`.
     """
@@ -92,19 +105,25 @@ class LiveProgressView:
         geometry: ProgressData,
         *,
         out_dir: str | None = None,
-        dpi: float = 100,
+        dpi: float | None = None,
         mode: str | None = None,
     ):
         self.geometry = geometry
         self.mode = mode or live_display_mode()
         self.out_dir = out_dir
-        self.dpi = dpi
+        self._dpi = dpi
         self.image_path: str | None = None
         self._pf: ProgressFigure | None = None
         self._handle = None
         self._closed = False
         self._shown: ProgressFrame | None = None
         self._shown_prev: ProgressFrame | None = None
+
+    @property
+    def dpi(self) -> float:
+        if self._dpi is not None:
+            return self._dpi
+        return LIVE_WINDOW_DPI if self.mode == "window" else FRAME_DPI
 
     # ------------------------------------------------------------------
     def open(self) -> None:
@@ -117,8 +136,8 @@ class LiveProgressView:
                 self._pf = ProgressFigure(self.geometry, dpi=self.dpi, pyplot=True)
                 manager = self._pf.fig.canvas.manager
                 if manager is not None:
-                    manager.set_window_title(WINDOW_TITLE)
-                self._pf.status_text.set_text("starting…")
+                    manager.set_window_title(f"{WINDOW_TITLE} ({self.geometry.run_label()})")
+                self._pf.status_text.set_text("Starting…")
                 plt.show(block=False)
                 self._pf.fig.canvas.flush_events()
                 return

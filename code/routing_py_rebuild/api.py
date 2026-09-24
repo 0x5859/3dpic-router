@@ -273,7 +273,9 @@ def run_optimization(
         ``optimization_history.json`` next to ``subgraphsdata.json``; after
         the run the whole process is rendered to
         ``optimization_progress.gif`` + ``optimization_progress.html``
-        (interactive player) and replayed when a display is available.
+        (interactive player), the final state to
+        ``optimization_progress.pdf`` / ``.png`` (450 ppi still), and it
+        is replayed when a display is available.
 
     ``progress_kwargs`` tunes it — see :class:`progress.ProgressOptions`
     (``interval``, ``show``, ``formats``, ``max_frames``, ``fps``, ``dpi``).

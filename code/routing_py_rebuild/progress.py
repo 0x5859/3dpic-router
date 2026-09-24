@@ -8,7 +8,8 @@ Three modes (``PROGRESS_MODES``):
   in Jupyter, otherwise ``optimization_live.png`` rewritten on disk.
 * ``"record"`` — save every improvement to ``optimization_history.json``
   and, after the run, render the whole process as an animated GIF plus a
-  self-contained HTML player (and open it when a display is available).
+  self-contained HTML player (and open it when a display is available),
+  and the final state as a PDF / 450 ppi PNG still.
 
 :class:`ProgressTracker` is an ``eval_observer`` (see
 :class:`optimizers.base.Optimizer`): every optimizer calls it once per
@@ -56,14 +57,16 @@ class ProgressOptions:
     record: open the replay at the end (a window, or the inline player in
     Jupyter). No effect without a display."""
     formats: tuple[str, ...] = REPLAY_FORMATS
-    """record: replay files to write — any of ``"gif"``, ``"html"``
-    (``()`` = history JSON only)."""
+    """record: files to write — ``"gif"`` / ``"html"`` (animation),
+    ``"pdf"`` / ``"png"`` (still of the final state); ``()`` = history
+    JSON only."""
     max_frames: int = 200
     """record: most frames per animation (the JSON keeps every one)."""
     fps: float | None = None
     """record: animation speed; None picks one from the frame count."""
-    dpi: float = 100
-    """Figure resolution of the live view and the replay."""
+    dpi: float | None = None
+    """Raster resolution of the live view and the animation frames; None =
+    120 for a window, 150 for images. The PNG still is always 450 ppi."""
 
     def __post_init__(self) -> None:
         if isinstance(self.formats, str):

@@ -73,14 +73,14 @@ also shows how the optimizer got there:
 |---|---|
 | `off` (default) | Unchanged: final result only. |
 | `live` | A figure — one panel per layer plus the best-loss curve — redrawn while the optimizer runs. It opens in a window on a desktop, updates in place in Jupyter, and on a headless machine rewrites `optimization_live.png`. |
-| `record` | Every improvement is saved to `optimization_history.json`. After the run, the whole process is rendered to `optimization_progress.gif` and `optimization_progress.html`, a self-contained player with play/pause, a slider, and speed control. On a desktop the replay also opens in a window. |
+| `record` | Every improvement is saved to `optimization_history.json`. After the run, the whole process is rendered to `optimization_progress.gif` and `optimization_progress.html`, a self-contained player with play/pause, a slider, and speed control. The final state is also saved as a paper-ready still, `optimization_progress.pdf` (editable text) and `.png` (450 ppi). On a desktop the replay also opens in a window. |
 
 ```bash
 uv run python -m routing_py_rebuild optimize --k 12 --maxiter 200 --output-dir /tmp/run --progress live
 uv run python -m routing_py_rebuild optimize --k 12 --maxiter 200 --output-dir /tmp/run --progress record
 
 # Re-render or re-open a recorded run later
-uv run python -m routing_py_rebuild replay --history /tmp/run/.../optimization_history.json --show
+uv run python -m routing_py_rebuild replay --history /tmp/run --show
 ```
 
 Tracking never changes the optimization: the same seed gives the same result in every mode.

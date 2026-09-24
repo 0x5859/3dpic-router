@@ -108,11 +108,13 @@ def _add_optimize_parser(sub):
                         "only; 'live' = redraw the current best routing while optimizing "
                         "(GUI window, or optimization_live.png when headless); 'record' = "
                         "save every improvement to optimization_history.json and replay "
-                        "the whole process afterwards (optimization_progress.gif/.html).")
+                        "the whole process afterwards (optimization_progress.gif/.html, "
+                        "plus a PDF/PNG still of the final state).")
     p.add_argument("--progress-kwargs", default=None,
                    help="JSON dict of progress options: interval (s between live "
                         "redraws, default 0.5), show (default true), formats "
-                        "(default [\"gif\", \"html\"]), max_frames (200), fps, dpi (100).")
+                        "(default [\"gif\", \"html\", \"pdf\", \"png\"]), "
+                        "max_frames (200), fps, dpi (default 120 window / 150 images).")
 
 
 def _add_plot_parser(sub):
@@ -137,16 +139,19 @@ def _add_report_parser(sub):
 def _add_replay_parser(sub):
     p = sub.add_parser("replay", help="Replay a recorded optimization process")
     p.add_argument("--history", required=True,
-                   help="Path to optimization_history.json (or the run directory).")
+                   help="optimization_history.json, its run directory, or an optimize "
+                        "--output-dir that holds a single run.")
     p.add_argument("--out-dir", default=None,
                    help="Output directory; defaults to the history file's directory.")
-    p.add_argument("--formats", default="gif,html",
-                   help="Comma-separated files to write: gif, html ('' = none).")
+    p.add_argument("--formats", default="gif,html,pdf,png",
+                   help="Comma-separated files to write: gif, html (animation), "
+                        "pdf, png (still of the final state); '' = none.")
     p.add_argument("--fps", type=float, default=None,
                    help="Frames per second (default: chosen from the frame count).")
     p.add_argument("--max-frames", type=int, default=200,
                    help="Most frames per animation; evenly spaced, first and final kept.")
-    p.add_argument("--dpi", type=float, default=100)
+    p.add_argument("--dpi", type=float, default=None,
+                   help="Animation frame resolution (default 150; the PNG still is 450).")
     p.add_argument("--show", action="store_true",
                    help="Open the interactive replay window (needs a GUI backend).")
 

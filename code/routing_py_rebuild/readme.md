@@ -282,10 +282,21 @@ uv run python -m routing_py_rebuild replay --history /tmp/run/.../optimization_h
 
 What each frame shows: one square panel per layer (edges colored by
 per-edge same-layer crossings, the `layers_combined.pdf` palette; edges
-that changed layer since the previous frame are drawn thick with a dark
+that changed layer since the previous frame are drawn heavier with a dark
 outline when only a few changed), a colorbar, and the best loss so far
-against the (log-scaled) evaluation count over a band of all evaluated
-losses.
+(black; the part still ahead in gray during a replay; the current point
+in red) against the log-scaled evaluation count, over a light band of
+all evaluated losses.
+
+Figure style (publication rules, shared with `layers_combined.pdf`): one
+7 pt font — Arial, else Helvetica / Liberation Sans / Arimo (see
+`plotting/_style.py`) — no figure title, sentence-case axis labels with
+units (`Evaluations`, `Mean edge loss (dB)`, `Crossings per edge`),
+0.5 pt data lines, four black 0.5 pt spines, inward ticks, and on the
+log axis minor ticks at 2..9 × 10^n with a light dashed / dotted grid.
+The layout is fixed in centimetres (17.8 cm wide at k ≤ 12, growing with
+√(k/12)); progress goes in a status line above the loss panel and the
+run identity in a muted note under it.
 
 - **live** — interactive matplotlib backend → a window, redrawn at most
   every `interval` seconds and never for more than ~20 % of the run time
@@ -295,18 +306,23 @@ losses.
   rewritten atomically in the run directory. A display error disables
   the view with a warning; the optimization always continues.
 - **record** — writes `optimization_history.json` (every frame; see the
-  contract below), then `optimization_progress.gif` (the final routing
-  holds 2.5 s) and `optimization_progress.html` (self-contained player:
-  play / pause / step / slider / speed / loop, keyboard shortcuts). With a
-  GUI backend the replay then opens in a window with a slider and a play
-  button; in Jupyter the player is shown inline. Ctrl-C during the run
-  still saves the improvements found so far.
+  contract below), then `optimization_progress.gif` (one shared 256-color
+  palette; the final routing holds 2.5 s), `optimization_progress.html`
+  (self-contained player with lossless WebP frames: play / pause / step /
+  slider / speed / loop, keyboard shortcuts) and a still of the final
+  state — final routing plus the complete loss curve, without status
+  line or run label — as `optimization_progress.pdf` (vector, TrueType
+  text that stays editable) and `optimization_progress.png` (450 ppi).
+  With a GUI backend the replay then opens in a window with a slider and
+  a play button; in Jupyter the player is shown inline. Ctrl-C during the
+  run still saves the improvements found so far.
 
 `progress_kwargs` / `--progress-kwargs` (`progress.ProgressOptions`;
 unknown keys raise `TypeError`): `interval` (0.5 s), `show` (True),
-`formats` (`["gif", "html"]`, `[]` = history only), `max_frames` (200 —
-the animation is capped, the JSON keeps every frame), `fps` (None =
-automatic, 4–15), `dpi` (100).
+`formats` (`["gif", "html", "pdf", "png"]`, `[]` = history only),
+`max_frames` (200 — the animation is capped, the JSON keeps every frame),
+`fps` (None = automatic, 4–15), `dpi` (None = 120 for a window, 150 for
+images; the PNG still is always 450 ppi).
 
 Tracking is an `eval_observer`, called after each loss evaluation with
 read-only access, so every mode yields the same trace and result for a
@@ -653,9 +669,17 @@ Importing `from routing_py_rebuild.plotting import ...` gives you
 
 Shared matplotlib rcParams. `apply_rcparams()` sets Arial 7pt, 0.5pt
 axis/edge lines, savefig dpi=500. Every public plot function calls it
-once at the top so fonts/lines are consistent across styles. Module
-constants `FONT_FAMILY`, `FONT_SIZE`, `LINE_WIDTH`, `SAVEFIG_DPI` are
-mutable for global overrides before the first draw.
+once at the top so fonts/lines are consistent across styles. The font is
+requested as a stack, `font_stack()` = `FONT_FAMILY` then
+`FONT_FALLBACKS` (Helvetica, Liberation Sans, Arimo, DejaVu Sans), so a
+machine without Arial renders a metric-compatible clone instead of
+matplotlib's default (identical output where Arial exists). Module
+constants `FONT_FAMILY`, `FONT_FALLBACKS`, `FONT_SIZE`, `LINE_WIDTH`,
+`SAVEFIG_DPI` are mutable for global overrides before the first draw.
+`style_axes(ax, grid=None)` / `style_colorbar(cbar, label=...)` apply
+the plotting-box rules used by the progress figure (four black 0.5 pt
+spines, inward ticks, log-axis minor ticks at 2..9 × 10^n, grid on by
+default for log axes).
 
 #### `plotting/_colormap.py`
 
@@ -818,7 +842,8 @@ record outputs and the end-of-run display. Also `ProgressOptions`,
 `LineCollection` per layer panel updated in place (edge geometry from
 `edge_polylines`, which reproduces the `visualize` style's arcs), a
 colorbar with the `crossings_color` window, and the log-x loss panel.
-Fixed inch-based layout so frames never jitter.
+Fixed centimetre layout so frames never jitter; `annotate=False` drops
+the status line and run label (stills).
 
 #### `plotting/progress_live.py`
 
@@ -830,9 +855,12 @@ optimizer starts, then redraws on each `LiveState` the tracker pushes;
 #### `plotting/progress_replay.py`
 
 `render_progress_replay(history, *, out_dir, formats, fps, max_frames,
-dpi)` renders each selected frame once and writes the GIF (per-frame
-256-color palette) and/or the HTML player (base64 PNG frames + a small
-inline script). `show_progress_replay(history, ...)` opens the same
+dpi)` renders each selected frame once, streaming it to the GIF (one
+shared palette with the thin-line colors reserved) and/or the HTML
+player (lossless-WebP data URIs + a small inline script); `"pdf"` /
+`"png"` add the final-state still. `history` may be the JSON, its run
+directory, or an `optimize --output-dir` holding a single run
+(`load_progress_data`). `show_progress_replay(history, ...)` opens the same
 frames in a matplotlib window with a `Slider`, a play/pause `Button` and
 ←/→/space/Home/End keys (prints a note and returns on non-GUI backends).
 `select_frames` keeps first and final frames when capping.

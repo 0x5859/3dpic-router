@@ -13,18 +13,31 @@ import math
 import os
 
 import jsonschema
+import matplotlib.pyplot as plt
 import numpy as np
+import pypdf
 import pytest
+from matplotlib.text import Text
 from PIL import Image, ImageSequence
 from routing_py_rebuild.__main__ import main as cli_main
 from routing_py_rebuild.api import make_graph, run_optimization
+from routing_py_rebuild.plotting import _style
 from routing_py_rebuild.plotting.progress_figure import (
     HISTORY_FILENAME,
     ProgressData,
+    ProgressFigure,
     edge_polylines,
+    frame_status,
 )
-from routing_py_rebuild.plotting.progress_live import LiveProgressView, live_display_mode
+from routing_py_rebuild.plotting.progress_live import (
+    LiveProgressView,
+    LiveState,
+    live_display_mode,
+    live_status,
+)
 from routing_py_rebuild.plotting.progress_replay import (
+    _Replayer,
+    load_progress_data,
     render_progress_replay,
     select_frames,
     show_progress_replay,
@@ -135,7 +148,7 @@ def test_record_final_frame_is_the_saved_routing(tmp_path):
 
 
 def test_record_writes_gif_and_html_replay(tmp_path):
-    res = _record(tmp_path)
+    res = _record(tmp_path, progress_kwargs={"formats": ["gif", "html"]})
     info = res["progress"]
     assert info["mode"] == "record"
     data = ProgressData.from_json(info["history"])
@@ -151,8 +164,29 @@ def test_record_writes_gif_and_html_replay(tmp_path):
         page = f.read()
     payload = json.loads(page.split("const DATA = ", 1)[1].split(";\n", 1)[0])
     assert len(payload["frames"]) == len(payload["meta"]) == n
+    assert all(f.startswith(("data:image/webp;base64,", "data:image/png;base64,"))
+               for f in payload["frames"])
     assert payload["meta"][-1]["final"] is True
     assert payload["meta"][-1]["eval"] == data.frames[-1].eval_index + 1
+
+
+def test_record_stills_are_publication_ready(tmp_path):
+    """pdf / png: the final state as a still — 450 ppi PNG, PDF with
+    TrueType (editable) text, and no status line / run label (a caption's
+    job), per the figure style rules."""
+    res = _record(tmp_path, progress_kwargs={"formats": ["pdf", "png"]})
+    info = res["progress"]
+    assert {"pdf", "png"} <= set(info) and "gif" not in info
+    with Image.open(info["png"]) as png:
+        assert png.info["dpi"][0] == pytest.approx(450, abs=1)
+    reader = pypdf.PdfReader(info["pdf"])
+    fonts = {f.get_object()["/Subtype"]
+             for page in reader.pages
+             for f in page["/Resources"]["/Font"].values()}
+    assert fonts and "/Type3" not in fonts
+    text = "".join(page.extract_text() for page in reader.pages)
+    assert "Mean edge loss (dB)" in text and "Evaluations" in text
+    assert "Final result" not in text and "seed" not in text
 
 
 def test_record_statistics_time_the_progress_phases(tmp_path):
@@ -309,6 +343,19 @@ def test_select_frames_keeps_first_and_final():
     assert picked == sorted(set(picked))
 
 
+def test_load_progress_data_accepts_run_or_output_dir(tmp_path):
+    res = _record(tmp_path / "out", progress_kwargs={"formats": []})
+    history = res["progress"]["history"]
+    run_dir = os.path.dirname(history)
+    for path in (history, run_dir, tmp_path / "out"):  # file, run dir, --output-dir
+        assert load_progress_data(path).frames
+    other = tmp_path / "out" / "second_run"
+    other.mkdir()
+    (other / HISTORY_FILENAME).write_text(open(history).read())
+    with pytest.raises(ValueError, match="several recorded runs"):
+        load_progress_data(tmp_path / "out")
+
+
 def test_render_replay_from_history_path(tmp_path):
     res = _record(tmp_path / "run", progress_kwargs={"formats": []})
     run_dir = os.path.dirname(res["progress"]["history"])
@@ -324,6 +371,65 @@ def test_show_replay_without_gui_returns(tmp_path, capsys):
     res = _record(tmp_path, progress_kwargs={"formats": []})
     show_progress_replay(res["progress"]["history"])
     assert "no GUI backend" in capsys.readouterr().out
+
+
+def test_progress_figure_typography(tmp_path):
+    """Figure style rules: one 7 pt font stack, no bold / figure title,
+    sentence-case axis labels with units, four 0.5 pt spines, inward ticks."""
+    res = _record(tmp_path, progress_kwargs={"formats": []})
+    data = ProgressData.from_json(res["progress"]["history"])
+    pf = ProgressFigure(data, dpi=40, context=True)
+    _Replayer(data, [0, len(data.frames) - 1], pf).draw(1)
+    pf.fig.canvas.draw()
+    texts = [t for t in pf.fig.findobj(Text) if t.get_visible() and t.get_text().strip()]
+    assert texts
+    assert all(t.get_fontsize() <= _style.FONT_SIZE for t in texts)
+    assert not any(t.get_fontweight() in ("bold", 700) for t in texts)
+    assert pf.fig._suptitle is None
+    lax = pf.loss_ax
+    assert lax.get_xlabel() == "Evaluations"
+    assert lax.get_ylabel() == "Mean edge loss (dB)"
+    assert pf._cbar.ax.get_ylabel() == "Crossings per edge"
+    assert all(sp.get_visible() and sp.get_linewidth() == _style.LINE_WIDTH
+               for sp in lax.spines.values())
+    assert lax.xaxis.get_tick_params(which="major")["direction"] == "in"
+    assert pf.status_text.get_text().startswith("Final result, evaluation ")
+    plt.close("all")
+
+
+def test_style_axes_log_rules():
+    assert _style.font_stack()[0] == _style.FONT_FAMILY == "Arial"
+    assert "Liberation Sans" in _style.font_stack()  # metric-compatible fallback
+    fig, ax = plt.subplots()
+    ax.set_xscale("log")
+    ax.set_xlim(1, 1000)
+    _style.style_axes(ax)
+    fig.canvas.draw()
+    minor = ax.xaxis.get_minorticklocs()
+    assert {2, 3, 9, 20, 90} <= {int(round(v)) for v in minor}
+    assert ax.xaxis.get_tick_params(which="minor")["direction"] == "in"
+    assert any(line.get_visible() for line in ax.get_xgridlines())  # log ⇒ grid on
+    assert all(sp.get_visible() for sp in ax.spines.values())
+    lin_fig, lin_ax = plt.subplots()
+    _style.style_axes(lin_ax)
+    lin_fig.canvas.draw()
+    assert not any(line.get_visible() for line in lin_ax.get_xgridlines())
+    plt.close("all")
+
+
+def test_status_lines_are_sentence_case_with_units(tmp_path):
+    res = _record(tmp_path, progress_kwargs={"formats": []})
+    data = ProgressData.from_json(res["progress"]["history"])
+    first, last = data.frames[0], data.frames[-1]
+    kw = dict(total=len(data.frames), evaluations=data.evaluations, initial_loss=first.loss)
+    assert frame_status(first, index=0, **kw).startswith("Improvement 1 of ")
+    assert "dB (initial)" in frame_status(first, index=0, **kw)
+    final = frame_status(last, index=len(data.frames) - 1, **kw)
+    assert final.startswith("Final result, evaluation ") and "dB (\u2212" in final
+    state = LiveState(frame=last, best_x=np.array([1.0, 2.0]),
+                      best_y=np.array([first.loss, last.loss]), envelope=None,
+                      evaluations=1234, elapsed_ms=1500, improvements=2, done=True)
+    assert live_status(state).startswith("Finished, 1,234 evaluations, best loss ")
 
 
 def test_edge_polylines_bow_same_side_pairs_inward():
