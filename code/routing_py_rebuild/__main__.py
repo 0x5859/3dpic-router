@@ -18,6 +18,7 @@ import json as _json
 import sys
 
 from .api import run_optimization
+from .core import DEFAULT_LOSS_CROSSING, DEFAULT_LOSS_INTERLAYERCROSSING, DEFAULT_LOSS_TAPER
 from .plotting import plot_from_json, render_progress_replay, show_progress_replay
 from .plotting.convergence import plot_convergence, plot_timings
 from .plotting.progress_replay import load_progress_data
@@ -70,9 +71,15 @@ def _add_optimize_parser(sub):
                         "run_report.summary.crosslayer_crossings_total; "
                         "loss formula is not parameterized on it in M3 "
                         "(see REFACTOR_GOALS.md §7 Q-e).")
-    p.add_argument("--loss-crossing", type=float, default=0.3)
-    p.add_argument("--loss-taper", type=float, default=0.05)
-    p.add_argument("--loss-interlayercrossing", type=float, default=0.006)
+    p.add_argument("--loss-crossing", type=float, default=DEFAULT_LOSS_CROSSING,
+                   help=f"Loss per intralayer crossing, dB (default {DEFAULT_LOSS_CROSSING:g}).")
+    p.add_argument("--loss-taper", type=float, default=DEFAULT_LOSS_TAPER,
+                   help=f"Loss per taper of a layer transition, dB "
+                        f"(default {DEFAULT_LOSS_TAPER:g}).")
+    p.add_argument("--loss-interlayercrossing", type=float,
+                   default=DEFAULT_LOSS_INTERLAYERCROSSING,
+                   help=f"Loss per interlayer crossing, dB "
+                        f"(default {DEFAULT_LOSS_INTERLAYERCROSSING:g}).")
     # M4 (§2-2): crosstalk coefficients + analysis knobs. When both
     # coefficients are None / 0 the engine short-circuits; when at least
     # one is non-zero the rank-3 tensor is computed once after

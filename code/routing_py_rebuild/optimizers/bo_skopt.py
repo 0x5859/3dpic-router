@@ -65,6 +65,7 @@ from .base import (
     BudgetGuard,
     OptimizationResult,
     Optimizer,
+    observer_copy,
     register_optimizer,
 )
 
@@ -168,7 +169,7 @@ class BOSkoptOptimizer(Optimizer):
                 )
             )
             if observer is not None:
-                observer(x, loss)
+                observer(observer_copy(x), loss)
             if guard.active:
                 guard.check_and_record(x, loss)
             return loss

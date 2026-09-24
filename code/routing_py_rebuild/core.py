@@ -57,6 +57,19 @@ def _load_subgraphs_schema() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Default loss model, dB per event: a crossing between two links in the
+# same layer (intralayer), one taper of a layer transition, and a crossing
+# between links in different layers (interlayer). ``api.make_graph`` /
+# ``api.run_optimization`` and the CLI take their defaults from here; the
+# C++ harness (``include/sinic/graph.hpp``, ``src/main.cpp``) uses the
+# same values.
+# ---------------------------------------------------------------------------
+DEFAULT_LOSS_CROSSING = 0.1
+DEFAULT_LOSS_TAPER = 0.05
+DEFAULT_LOSS_INTERLAYERCROSSING = 0.001
+
+
+# ---------------------------------------------------------------------------
 # M3 + post-M8 (2026-05-15): waveguides_per_link notice text — shared
 # between __init__ and the v1.x→v2.0 loader fallback (PlotData) so the
 # message stays consistent. REFACTOR_GOALS.md §4 M3 附注 "Warning 策略"
@@ -423,9 +436,10 @@ class SiNInterconnectionGraph:
         emits a one-time informational notice per process; wpl ∈
         {3, 4, ..., 32} emits an experimental warning; non-positive /
         non-int / > 32 raises.
-    loss_crossing, loss_taper, loss_interlayercrossing : float
-        Per-event loss coefficients (dB-equivalent integer-summed; see
-        §2-2 for unit conventions).
+    loss_crossing, loss_taper, loss_interlayercrossing : float, default 0.1, 0.05, 0.001
+        Per-event loss coefficients — intralayer crossing, taper, and
+        interlayer crossing (dB-equivalent integer-summed; see §2-2 for
+        unit conventions). Defaults: ``DEFAULT_LOSS_*``.
     loss_intralayer_crosstalk, loss_interlayer_crosstalk : float | None
         Crosstalk leakage coefficients (fractional power per crossing).
         Recorded on the graph for downstream consumers — the per-edge
@@ -449,9 +463,9 @@ class SiNInterconnectionGraph:
         perimeter_layer: int | None = None,
         layer_pitch_um: float = 1.2,
         waveguides_per_link: int = 1,
-        loss_crossing: float = 0.3,
-        loss_taper: float = 1.0,
-        loss_interlayercrossing: float = 0.006,
+        loss_crossing: float = DEFAULT_LOSS_CROSSING,
+        loss_taper: float = DEFAULT_LOSS_TAPER,
+        loss_interlayercrossing: float = DEFAULT_LOSS_INTERLAYERCROSSING,
         loss_intralayer_crosstalk: float | None = None,
         loss_interlayer_crosstalk: float | None = None,
         coherence_model: str = "incoherent_v1",

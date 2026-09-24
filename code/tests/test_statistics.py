@@ -425,9 +425,13 @@ def test_observer_call_count_equals_eval_count_all_optimizers():
 def test_x_mutating_observer_cannot_perturb_optimizer(tmp_path):
     """Defense-in-depth (§5 / Opus P2-1): even an observer that mutates
     its ``x`` argument in place must NOT change the optimizer trajectory.
-    The contract relies on ``wrapped`` computing loss BEFORE calling the
-    observer and scipy holding its own copy of x. This locks that
-    invariant against any future refactor of ``wrapped``."""
+    ``wrapped`` computes the loss BEFORE calling the observer and hands it
+    ``observer_copy(x)``: scipy copies an accepted point into its state
+    only after the objective returns, so a write to the live vector would
+    leak into the search. The observer flips every edge's layer (a flip
+    of only the pinned edge 0 could cancel out over repeated calls and
+    never touches the loss). This locks that invariant against any future
+    refactor of ``wrapped``."""
     import numpy as np
     from routing_py_rebuild.api import run_optimization
 
@@ -439,7 +443,7 @@ def test_x_mutating_observer_cannot_perturb_optimizer(tmp_path):
     def _mutating(x, loss):
         arr = np.asarray(x)
         if arr.size:
-            arr[0] = 1.0 - float(arr[0])  # attempt to corrupt the vector
+            arr[:] = 1.0 - arr  # attempt to corrupt the vector
 
     ra = run_optimization(
         output_dir=str(tmp_path / "clean"), eval_observer=None, **common

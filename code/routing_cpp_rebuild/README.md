@@ -61,7 +61,7 @@ routing_cpp_rebuild/
 | `-i, --iter N` | `DUALSA_ITER` | `500` | dual annealing 迭代数 |
 | `--cl "a,b,c"` | `CL_VALUES` | `0.1` | crossing loss 取值列表 |
 | `--tl "a,b,c"` | `TL_VALUES` | `0.05` | taper loss 取值列表 |
-| `--itl "a,b,c"` | `ITL_VALUES` | `0` | interlayer loss 取值列表 |
+| `--itl "a,b,c"` | `ITL_VALUES` | `0.001` | interlayer loss 取值列表 |
 | `--out DIR` | `OUTPUT_DIR` | `./output/` | 输出目录 |
 | `--no-run` | — | — | 只 build 不运行 |
 
@@ -98,7 +98,7 @@ Layer 0 => count=410, avg=15.85, var=72.57, std=8.52, range=34.2
 Layer 1 => count=370, avg=17.66, var=50.33, std=7.09, range=30.8
 [Flattened layers] => count=780, avg=16.71, ...
 [Planar Graph]     => avg=46.87, ...      ← 不分层的对照
-Subgraphs saved to ./output/cl_0.10_tl_0.05_itl_0.000_nodes_40/subgraphsdata.json
+Subgraphs saved to ./output/cl_0.10_tl_0.05_itl_0.001_nodes_40/subgraphsdata.json
 ```
 
 注：求解过程中 `dual_annealing` 还会向 **stderr** 大量打印 `trace: updating best:` 日志（每次目标函数取得新最小值）。这些是诊断信息，不影响结果。需要静默：

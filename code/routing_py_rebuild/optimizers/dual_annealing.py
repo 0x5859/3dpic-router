@@ -12,6 +12,7 @@ from .base import (
     BudgetGuard,
     OptimizationResult,
     Optimizer,
+    observer_copy,
     register_optimizer,
 )
 
@@ -88,7 +89,7 @@ class DualAnnealingOptimizer(Optimizer):
                 )
             )
             if self.eval_observer is not None:
-                self.eval_observer(x, float(loss))
+                self.eval_observer(observer_copy(x), float(loss))
             # Track best-so-far + cap check. No-op (zero overhead) when
             # both max_nfe / wall_time_s are None.
             if guard.active:

@@ -332,8 +332,11 @@ unknown keys raise `TypeError`): `interval` (0.5 s), `show` (True),
 images; the PNG still is always 450 ppi).
 
 Tracking is an `eval_observer`, called after each loss evaluation with
-read-only access, so every mode yields the same trace and result for a
-given seed (`test_progress_modes_do_not_perturb_the_optimizer`). Record
+a private copy of the evaluated vector (`optimizers.base.observer_copy`;
+scipy copies an accepted point only after the objective returns, so an
+observer never sees the live one), so every mode yields the same trace
+and result for a given seed
+(`test_progress_modes_do_not_perturb_the_optimizer`). Record
 mode adds well under 1 % to the optimizer wall time; live mode adds its
 drawing time (bounded as above). With `collect_statistics=True` the
 record outputs are timed as `progress_history_write_ms` and
@@ -485,23 +488,25 @@ CLI entry: `python -m routing_py_rebuild ...`. Subparsers:
 
 `--optimizer-kwargs` / `--plot-kwargs` accept a JSON dict string.
 
-> **CLI vs library default**: `--loss-taper` defaults to `0.05` in the
-> CLI, while `core.SiNInterconnectionGraph.__init__` and
-> `api.run_optimization` default to `1.0`. Pre-existing inconsistency,
-> kept for backward compatibility with existing CLI invocations.
+> **Default loss model** (CLI, `api`, and `core` alike): intralayer
+> crossing 0.1 dB, taper 0.05 dB, interlayer crossing 0.001 dB per event
+> — `core.DEFAULT_LOSS_CROSSING` / `DEFAULT_LOSS_TAPER` /
+> `DEFAULT_LOSS_INTERLAYERCROSSING`; the C++ harness uses the same
+> values. Earlier versions defaulted to 0.3 / 1.0 / 0.006 (0.3 / 0.05 /
+> 0.006 in the CLI); pass those explicitly to reproduce an old run.
 
 #### `api.py`
 
 Two functions:
 
-- `make_graph(*, k, positions=None, output_dir=None, loss_crossing=0.3,
-  loss_taper=1.0, loss_interlayercrossing=0.006, shape="square")` —
+- `make_graph(*, k, positions=None, output_dir=None, loss_crossing=0.1,
+  loss_taper=0.05, loss_interlayercrossing=0.001, shape="square")` —
   thin constructor that defaults to `distribute_nodes("square",
   nodes_per_side=k//4, side_length=1)` when `positions` is omitted.
 - `run_optimization(*, k=12, optimizer="dual_annealing", maxiter=500,
   seed=5859, optimizer_kwargs=None, positions=None,
-  output_dir="./assets/run/", loss_crossing=0.3, loss_taper=1.0,
-  loss_interlayercrossing=0.006, plot=True, plot_style="visualize",
+  output_dir="./assets/run/", loss_crossing=0.1, loss_taper=0.05,
+  loss_interlayercrossing=0.001, plot=True, plot_style="visualize",
   plot_kwargs=None, save_json=True, run_loss_analysis=True, ...,
   progress="off", progress_kwargs=None)` —
   end-to-end orchestration. Returns
@@ -517,7 +522,7 @@ plotting code read-only on the graph regardless.
 #### `core.py`
 
 The data model. `SiNInterconnectionGraph(k, positions, filepath=None,
-loss_crossing=0.3, loss_taper=1.0, loss_interlayercrossing=0.006)`
+loss_crossing=0.1, loss_taper=0.05, loss_interlayercrossing=0.001)`
 constructs the complete graph and a planar reference `_G_Planar`. M2
 deferred the one-time O(E²) crossing stamp out of `__init__` — call
 `build_crossings_index()` (or just call `loss_function` /

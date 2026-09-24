@@ -61,6 +61,11 @@ print(res["loss"], res["json_path"])
 plot_from_json(res["json_path"], style="visualize", out_dir="/tmp/sin_plot/")
 ```
 
+The default loss model charges 0.1 dB per intralayer crossing, 0.05 dB per taper, and 0.001 dB
+per interlayer crossing, in the Python library, the CLI, and the C++ harness alike. Change it
+with `--loss-crossing`, `--loss-taper`, `--loss-interlayercrossing` (CLI) or the matching
+`loss_crossing=`, `loss_taper=`, `loss_interlayercrossing=` arguments.
+
 See `code/routing_py_rebuild/readme.md` for the full module-level reference (architecture,
 the optimizer/plot-style registries, and the JSON contract).
 

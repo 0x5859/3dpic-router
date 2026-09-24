@@ -41,7 +41,12 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from .core import SiNInterconnectionGraph
+from .core import (
+    DEFAULT_LOSS_CROSSING,
+    DEFAULT_LOSS_INTERLAYERCROSSING,
+    DEFAULT_LOSS_TAPER,
+    SiNInterconnectionGraph,
+)
 from .crosstalk import compute_crosstalk_tensor
 from .optimizers import get_optimizer
 from .plotting import (
@@ -149,9 +154,9 @@ def make_graph(
     perimeter_layer: int | None = None,
     layer_pitch_um: float = 1.2,
     waveguides_per_link: int = 1,
-    loss_crossing: float = 0.3,
-    loss_taper: float = 1.0,
-    loss_interlayercrossing: float = 0.006,
+    loss_crossing: float = DEFAULT_LOSS_CROSSING,
+    loss_taper: float = DEFAULT_LOSS_TAPER,
+    loss_interlayercrossing: float = DEFAULT_LOSS_INTERLAYERCROSSING,
     loss_intralayer_crosstalk: float | None = None,
     loss_interlayer_crosstalk: float | None = None,
     coherence_model: str = "incoherent_v1",
@@ -204,9 +209,9 @@ def run_optimization(
     perimeter_layer: int | None = None,
     layer_pitch_um: float = 1.2,
     waveguides_per_link: int = 1,
-    loss_crossing: float = 0.3,
-    loss_taper: float = 1.0,
-    loss_interlayercrossing: float = 0.006,
+    loss_crossing: float = DEFAULT_LOSS_CROSSING,
+    loss_taper: float = DEFAULT_LOSS_TAPER,
+    loss_interlayercrossing: float = DEFAULT_LOSS_INTERLAYERCROSSING,
     loss_intralayer_crosstalk: float | None = None,
     loss_interlayer_crosstalk: float | None = None,
     coherence_model: str = "incoherent_v1",

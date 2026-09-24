@@ -78,6 +78,7 @@ from .base import (
     BudgetGuard,
     OptimizationResult,
     Optimizer,
+    observer_copy,
     register_optimizer,
 )
 
@@ -126,7 +127,7 @@ class _LossProblem(ElementwiseProblem):
             )
         )
         if self._eval_observer is not None:
-            self._eval_observer(x, loss)
+            self._eval_observer(observer_copy(x), loss)
         # Stage H budget guard (raises BudgetCapExceeded on cap-hit; the
         # outer optimize() catches it and returns guard's best-so-far).
         if self._guard is not None and self._guard.active:
