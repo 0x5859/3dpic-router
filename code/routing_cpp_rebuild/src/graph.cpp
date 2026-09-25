@@ -416,54 +416,66 @@ void SiNInterconnectionGraph::create_subgraphs() {
     //   1. sub_G has exactly L entries (one per layer index, including
     //      empty layers)
     //   2. each entry gets intra-layer crossings + per-edge loss stamped
-    //   3. every adjacent pair (i, i+1) runs count_interlayer_crossings
-    //      with reset=false so middle layers accumulate from both sides
+    //   3. every adjacent pair (i, i+1) gets interlayer crossings with
+    //      the `count_interlayer_crossings` accounting (the lower edge
+    //      sees one "above", the upper edge one "below"; middle layers
+    //      accumulate from both sides)
     //   4. apply_interlayer_loss for each layer at the end
     //
-    // M6 stage-2 review fix (codex P1-1): make sure `_G_Planar_` is
-    // stamped before any downstream consumer (e.g. the JSON writer
-    // emitting `complete_graph` + `loss_analysis.avg_loss_completegraph`)
-    // reads it. Pre-fix, `_G_Planar_` was stamped eagerly in the ctor;
-    // post-P0 the stamping is lazy inside `ensure_topology_()`. Public
-    // callers reach `_G_Planar_` either via `analyze_loss()` (which
-    // already calls `ensure_topology_()`) or via `create_subgraphs()` +
-    // direct `graph.planar_reference()` access. The test surface and
-    // any consumer that mirrors the legacy "construct → create →
-    // serialize" pattern relies on this trigger.
+    // Crossings come from the cached `CrossingTopology` — the relation
+    // `loss_function` scores — so the stamped counts always match what
+    // the optimizer saw, on every layout, without an O(E²) geometry pass
+    // per layer. Wherever `edge_crosses` is exact (everything but float
+    // round-off on collinear side runs) they equal the old per-layer
+    // `count_crossings_with_detail` / `count_interlayer_crossings`.
+    //
+    // M6 stage-2 review fix (codex P1-1): `ensure_topology_()` also
+    // stamps `_G_Planar_` before any downstream consumer (e.g. the JSON
+    // writer emitting `complete_graph` +
+    // `loss_analysis.avg_loss_completegraph`) reads it.
     ensure_topology_();
+
+    // `allEdges_` shares the topology's row-major edge order (see the
+    // `_G_Planar_` stamping in `ensure_topology_()`).
+    const std::size_t n = allEdges_.size();
+    std::vector<int> intra(n, 0);
+    std::vector<int> above(n, 0);
+    std::vector<int> below(n, 0);
+    for (const auto& pr : topology_->crossing_pairs()) {
+        const auto i = static_cast<std::size_t>(pr.first);
+        const auto j = static_cast<std::size_t>(pr.second);
+        const int la = std::get<2>(allEdges_[i]).layer;
+        const int lb = std::get<2>(allEdges_[j]).layer;
+        if (la == lb) {
+            if (la >= 0 && la < L_) {
+                ++intra[i];
+                ++intra[j];
+            }
+        } else if (std::llabs(static_cast<long long>(la)
+                              - static_cast<long long>(lb)) == 1
+                   && std::min(la, lb) >= 0 && std::max(la, lb) < L_) {
+            ++above[la < lb ? i : j];
+            ++below[la < lb ? j : i];
+        }
+    }
 
     sub_G_.clear();
     sub_G_.resize(static_cast<std::size_t>(L_));
 
     for (int layer = 0; layer < L_; ++layer) {
         EdgeList& bucket = sub_G_[static_cast<std::size_t>(layer)];
-        for (const auto& e : allEdges_) {
-            if (std::get<2>(e).layer == layer) bucket.push_back(e);
-        }
-        // Reset all counters on this layer (mirror of Python
-        // `nx.set_edge_attributes(subgraph, 0, "<field>")` block).
-        for (auto& e : bucket) {
-            auto& ed = std::get<2>(e);
-            ed.crossings                = 0;
-            ed.interlayerCrossings      = 0;
-            ed.interlayerCrossingsAbove = 0;
-            ed.interlayerCrossingsBelow = 0;
+        for (std::size_t i = 0; i < n; ++i) {
+            if (std::get<2>(allEdges_[i]).layer != layer) continue;
+            bucket.push_back(allEdges_[i]);
+            auto& ed = std::get<2>(bucket.back());
+            ed.crossings                = intra[i];
+            ed.interlayerCrossings      = above[i] + below[i];
+            ed.interlayerCrossingsAbove = above[i];
+            ed.interlayerCrossingsBelow = below[i];
         }
         if (!bucket.empty()) {
-            count_crossings_with_detail(bucket, positions_);
             compute_per_edge_loss(bucket, loss_crossing_, loss_taper_,
                                   edge_coupler_layer_);
-        }
-    }
-
-    // M3 (§2-3 目标 A + D): adjacent-layer interlayer crossings only.
-    // Default `reset=false` lets middle layers accumulate above +
-    // below events across adjacent-pair iterations.
-    for (int i = 0; i < L_ - 1; ++i) {
-        auto& lo = sub_G_[static_cast<std::size_t>(i)];
-        auto& hi = sub_G_[static_cast<std::size_t>(i + 1)];
-        if (!lo.empty() && !hi.empty()) {
-            count_interlayer_crossings(lo, hi, positions_);
         }
     }
 

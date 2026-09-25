@@ -532,15 +532,23 @@ Method groups:
 
 - **Crossing detection**: `edge_crosses(e1, e2)`,
   `count_crossings_with_detail(graph)`,
-  `count_interlayercrossings(g1, g2)` (still shapely-based, used by
-  `analyze_loss` for per-subgraph stamping; `loss_function`'s hot loop
-  no longer touches them — see M2 cached topology below).
+  `count_interlayercrossings(g1, g2)` — the shapely reference
+  implementations (brute-force oracles in the tests). Neither
+  `loss_function` nor `create_subgraphs` calls them any more: both
+  count from the M2 cached topology below, so the stamped results
+  always match what the optimizer scored.
 - **M2 Phase A — cached topology**: `build_crossings_index()` builds
   and caches the K_k crossing-pair index (`_crossing_pairs`,
   `_edge_list`, `_edge_index`, `_perimeter_mask`); idempotent. The
   fast path is a pure-integer alternating-endpoints test gated by
-  `_is_cyclic_convex_positions`; non-convex layouts fall through to a
-  vectorized orientation test with closed-form degenerate handling.
+  `_is_cyclic_convex_positions`, which treats a boundary turn with
+  |sin| <= `_COLLINEAR_TOL` (1e-9) as a straight step — nodes in a row
+  along a side, which interpolation leaves ~1e-17 off their line — so
+  square, rectangle, triangle, polygon, circle and custom convex
+  outlines all take it. Non-convex layouts fall through to a
+  vectorized exact-orientation test with closed-form degenerate
+  handling. The C++ `CrossingTopology::is_cyclic_convex` mirrors the
+  tolerance.
 - **Loss**: `cal_loss_of_edge(graph)`,
   `update_interlayercrossings_loss(graph)`,
   `loss_function(layers)` (M2 rewrite: vectorized integer
@@ -552,8 +560,9 @@ Method groups:
   `k_base_no_carry_sub`, `routing_method_1(takeaway, layer)` — k-base
   offset pattern used as initial guesses by both optimizers.
 - **Subgraph build**: `create_subgraphs()` splits `self.G` by `layer`
-  attr into `self.sub_G`, stamps crossings + losses, and computes
-  inter-layer crossings between layer 0 and layer 1.
+  attr into `self.sub_G` and stamps per-edge crossings, inter-layer
+  crossings between adjacent layers (`_above` / `_below`), and losses,
+  counted from the cached topology.
 - **Optimization result application**: `_apply_layer_assignment(layers)`
   pins perimeter edges (`|u-v| ∈ {1, k-1}`) to layer 0 regardless of
   input — preserves the original physical-ring invariant.

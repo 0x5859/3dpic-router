@@ -69,10 +69,19 @@ bool CrossingTopology::is_cyclic_convex(int k, const PositionMap& positions) {
     }
 
     // Compute exterior turn angles around the polygon. For a simple
-    // convex polygon, all non-zero `cross` values share a sign AND
-    // the signed sum of turn angles equals ±2π. Pentagram-style
-    // winding-2 layouts have all-same-sign cross but |Σ| ≈ 4π → we
-    // detect via the angle sum.
+    // convex polygon, all non-straight turns share a sign AND the
+    // signed sum of turn angles equals ±2π. Pentagram-style winding-2
+    // layouts have all-same-sign cross but |Σ| ≈ 4π → we detect via the
+    // angle sum.
+    //
+    // A turn with |sin| <= COLLINEAR_TOL is a straight step: nodes in a
+    // row along a side (triangle / polygon generators, coordinates from
+    // trig) sit ~1e-17 (relative) off their line with either sign, which
+    // used to push those layouts onto the geometric fallback and make
+    // their crossing set depend on round-off. A straight step must go
+    // forward; a reversal is a spike and never convex. Mirrors
+    // `_COLLINEAR_TOL` in routing_py_rebuild/core.py.
+    constexpr double COLLINEAR_TOL = 1e-9;
     bool any_nz = false;
     bool seen_pos = false;
     bool seen_neg = false;
@@ -91,7 +100,12 @@ bool CrossingTopology::is_cyclic_convex(int k, const PositionMap& positions) {
         const double c = cross2(e1x, e1y, e2x, e2y);
         const double d = e1x * e2x + e1y * e2y;
 
-        if (c != 0.0) {
+        const bool straight = std::abs(c) <= COLLINEAR_TOL
+                                                 * std::hypot(e1x, e1y)
+                                                 * std::hypot(e2x, e2y);
+        if (straight) {
+            if (d <= 0.0) return false;
+        } else {
             any_nz = true;
             if (c > 0.0) seen_pos = true;
             else         seen_neg = true;

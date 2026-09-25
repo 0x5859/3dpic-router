@@ -117,11 +117,10 @@ inward arcs.
 
 When every node lies on a convex outline, two straight links cross exactly when their end nodes
 alternate along the boundary. The optimization then depends only on the node order: a square, a
-circle, or any convex chip outline with the same order gives the same result. The coordinates
-change the problem when some nodes sit inside the convex hull of the others, for example on a
-notched outline. Known issue: layouts with three or more nodes on a slanted straight side, such as
-the triangle, currently miss the convex shortcut because of floating-point rounding, so their
-crossings are counted differently.
+triangle, a circle, or any convex chip outline with the same order gives the same result. Nodes in
+a row along a straight side count as collinear up to floating-point rounding, so a slanted side
+behaves like an axis-aligned one. The coordinates change the problem when some nodes sit inside the
+convex hull of the others, for example on a notched outline.
 
 ## C++ quickstart
 
