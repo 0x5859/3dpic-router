@@ -7,3 +7,6 @@
 # Vendored third-party C++ — exclude from GitHub language stats and diffs
 code/routing_cpp_rebuild/external/**     linguist-vendored
 code/routing_cpp_rebuild/include/nlohmann/** linguist-vendored
+
+# Built replay page (pages/build_page.py) — exclude from GitHub language stats and diffs
+pages/index.html linguist-generated

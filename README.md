@@ -21,6 +21,9 @@ Two parallel, numerically-aligned implementations ship:
 Both emit the same self-contained `subgraphsdata.json` snapshot, validated against the
 JSON Schemas in `code/schema/`.
 
+An interactive replay of the optimization on eight boundary layouts, with the crossings in each
+layer, is at <https://0x5859.github.io/3dpic-router/> (source in `pages/`).
+
 ## Layout
 
 | Path | What lives here |
@@ -30,6 +33,7 @@ JSON Schemas in `code/schema/`.
 | `code/schema/` | JSON Schemas for the data contract (`subgraphsdata.schema.json`, `run_report.schema.json`, and the Python-only `optimization_history.schema.json`). Validated at write **and** read time by both implementations. |
 | `code/tests/` | Python test suite — parity, crossings, crosstalk, multilayer, per-optimizer, and statistics — plus `golden/` reference fixtures. |
 | `code/assets/MinimizedRectlinear/` | Pre-computed `minimize{k}.b16` point sets consumed by the `io_utils` readers. |
+| `pages/` | The replay page served on GitHub Pages (`index.html`) and the scripts that record its runs and build it. |
 
 > **Path note:** `schema/` is a runtime dependency of both cores and is located relative
 > to the `code/` tree (Python: sibling of `routing_py_rebuild/`; C++: walked up from the

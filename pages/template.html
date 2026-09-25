@@ -1,0 +1,802 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D-PIC Routing Replay</title>
+<meta name="description" content="Replays of the 3D-PIC layer-assignment optimization on eight boundary layouts, with the waveguide crossings in each layer.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="3D-PIC Routing Replay">
+<meta property="og:description" content="Replays of the 3D-PIC layer-assignment optimization on eight boundary layouts, with the waveguide crossings in each layer.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231b1f24'/%3E%3Cpath d='M8 24L24 8' stroke='%237b9ff9' stroke-width='3.5' stroke-linecap='round'/%3E%3Cpath d='M8 8L24 24' stroke='%23e5707a' stroke-width='3.5' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Arimo:wght@400;600&display=swap">
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f4f6f8;
+    --surface: #ffffff;
+    --ink: #1b1f24;
+    --muted: #5b6470;
+    --line: #d3d9e0;
+    --hl: #fbeef0;
+    --code-bg: #eef1f4;
+    --accent: #b2182b;
+    --accent-ink: #ffffff;
+    --focus: #b2182b;
+    --node: #afe0e8;
+    --node-edge: #4f8c97;
+    /* The figure is a light "paper" card in both themes, like the
+       publication figure it mirrors; its tokens are not themed. */
+    --fig-bg: #ffffff;
+    --fig-ink: #1b1f24;
+    --fig-muted: #5b6470;
+    --fig-grid: #e9ecf0;
+    --fig-axis: #b3bac3;
+    --fig-best: #1b1f24;
+    --fig-rest: #b9c0c8;
+    --fig-band: #3a7dc4;
+    --fig-mark: #b2182b;
+    --fig-node: #afe0e8;
+    --fig-outline: #1a1a1a;
+    --fig-rule: #e3e7ec;
+    --font: Arial, Helvetica, Arimo, "Liberation Sans", sans-serif;
+    --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #111418;
+      --surface: #1a1e24;
+      --ink: #e6e9ed;
+      --muted: #9aa3ae;
+      --line: #333a44;
+      --hl: #2c1c20;
+      --code-bg: #161a1f;
+      --accent: #e5707a;
+      --accent-ink: #1a0507;
+      --focus: #e5707a;
+      --node: #afe0e8;
+      --node-edge: #afe0e8;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #111418;
+    --surface: #1a1e24;
+    --ink: #e6e9ed;
+    --muted: #9aa3ae;
+    --line: #333a44;
+    --hl: #2c1c20;
+    --code-bg: #161a1f;
+    --accent: #e5707a;
+    --accent-ink: #1a0507;
+    --focus: #e5707a;
+    --node: #afe0e8;
+    --node-edge: #afe0e8;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.5 var(--font);
+    padding-inline: 16px;
+    padding-block: 20px 32px;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; display: grid; gap: 12px; }
+  header { display: grid; gap: 8px; }
+  .titlebar { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+  .repo {
+    font-size: 13px; color: var(--muted); border-radius: 2px;
+    text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px;
+  }
+  .repo:hover { color: var(--ink); text-decoration-color: var(--muted); }
+  .repo:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0; }
+  p { margin: 0; }
+  .setup, .note { color: var(--muted); font-size: 12px; }
+  .picker { display: grid; gap: 6px; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); }
+  .pick { display: grid; justify-items: center; gap: 1px; padding: 6px 4px 5px; min-height: 0; }
+  .pick span { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .pick[aria-checked="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .pick[aria-checked="true"] span { color: var(--ink); font-weight: 600; }
+  .glyph { width: 56px; height: 36px; display: block; }
+  .glyph .ring { fill: none; stroke: var(--muted); stroke-width: 0.8; stroke-linejoin: round; opacity: 0.55; }
+  .glyph circle { fill: var(--node); stroke: var(--node-edge); stroke-width: 0.6; }
+  .summary { display: flex; flex-wrap: wrap; gap: 2px 16px; font-variant-numeric: tabular-nums; }
+  #m-layout { color: var(--muted); }
+
+  /* ---- figure ---------------------------------------------------- */
+  .fig {
+    margin: 0; position: relative; background: var(--fig-bg); color: var(--fig-ink);
+    border: 1px solid var(--line); border-radius: 6px;
+    padding: 16px 18px 12px; display: grid; gap: 14px;
+  }
+  .kpis { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 40px; }
+  .kpi { display: grid; gap: 2px; }
+  .kl { font-size: 13px; color: var(--fig-muted); }
+  .kv { font-size: 28px; line-height: 1; font-weight: 600; letter-spacing: -0.01em; }
+  .kpi.hero .kv { font-size: 48px; }
+  .panels { display: grid; gap: 18px; }
+  .panel { display: grid; gap: 6px; align-content: start; min-width: 0; }
+  .ph { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px;
+        border-top: 1px solid var(--fig-rule); padding-top: 8px; }
+  .ph .pl { flex-basis: 100%; font-size: 13px; color: var(--fig-muted); }
+  .ph .pv b { font-size: 28px; line-height: 1; font-weight: 600; letter-spacing: -0.01em; }
+  .ph .pv span, .ph .pm { font-size: 13px; color: var(--fig-muted); }
+  .net { display: block; width: 100%; height: auto; overflow: visible; }
+  .net .e { fill: none; stroke-width: 1.25px; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+  .net .e.mv { stroke-width: 3px; }
+  .net .e.hl { stroke-width: 3.5px; }
+  .net .o { fill: none; stroke: var(--fig-outline); stroke-width: 5.5px; stroke-linecap: round;
+            vector-effect: non-scaling-stroke; }
+  .net .h { fill: none; stroke: transparent; stroke-width: 12px; pointer-events: stroke;
+            vector-effect: non-scaling-stroke; cursor: crosshair; }
+  .net circle { fill: var(--fig-node); }
+  .net text { fill: var(--fig-ink); text-anchor: middle; dominant-baseline: central;
+              font-family: var(--font); pointer-events: none; }
+  .keys { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 28px;
+          font-size: 12px; color: var(--fig-muted); }
+  .key { display: inline-flex; align-items: center; gap: 8px; }
+  .keys svg { display: block; overflow: visible; }
+  .keys text { fill: var(--fig-muted); font: 11px var(--font); font-variant-numeric: tabular-nums; }
+  #cbar { width: 232px; max-width: 48vw; height: auto; }
+  .chartbox { display: grid; gap: 4px; border-top: 1px solid var(--fig-rule); padding-top: 10px; }
+  .chart { position: relative; height: 210px; }
+  .chart svg { display: block; width: 100%; height: 100%; }
+  .chart text { fill: var(--fig-muted); font: 11px var(--font); font-variant-numeric: tabular-nums; }
+  .chart .ttl { fill: var(--fig-ink); font-size: 12px; }
+  .tip {
+    position: absolute; z-index: 2; pointer-events: none; min-width: 120px;
+    background: var(--fig-bg); color: var(--fig-ink); border: 1px solid var(--fig-axis);
+    border-radius: 6px; padding: 6px 9px; font-size: 12px; line-height: 1.35;
+    box-shadow: 0 2px 8px rgba(20, 24, 30, 0.12);
+  }
+  .tip strong { display: block; font-size: 14px; font-weight: 600; }
+  .tip span { display: block; color: var(--fig-muted); }
+  .fig details { border-top: 1px solid var(--fig-rule); padding-top: 8px; }
+  .fig summary { cursor: pointer; font-size: 13px; color: var(--fig-muted); width: fit-content; }
+  .tv { margin-top: 8px; max-height: 320px; overflow: auto; }
+  .tv table { font-size: 12px; }
+  .tv td, .tv th { padding: 4px 10px; border-color: var(--fig-rule); }
+  .tv thead th { position: sticky; top: 0; background: var(--fig-bg); color: var(--fig-muted); }
+  .tv tr.current { background: #fbeef0; }
+  .tv .rowpick { color: var(--fig-ink); }
+  @media (max-width: 560px) {
+    .fig { padding: 12px 12px 10px; }
+    .kpi.hero .kv { font-size: 40px; }
+    .kv, .ph .pv b { font-size: 24px; }
+    .panels { gap: 10px; }
+    .chart { height: 180px; }
+  }
+
+  /* ---- controls, tables ------------------------------------------ */
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .steps { display: flex; gap: 6px; }
+  button, select {
+    font: inherit; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--line); border-radius: 6px;
+    min-height: 34px; padding: 4px 10px; cursor: pointer;
+  }
+  button:hover:not(:disabled), select:hover { border-color: var(--muted); }
+  button.primary {
+    background: var(--accent); border-color: var(--accent); color: var(--accent-ink);
+    min-width: 84px; font-weight: 600;
+  }
+  button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--focus); outline-offset: 2px;
+  }
+  input[type=range] { flex: 1 1 240px; min-width: 0; accent-color: var(--accent); min-height: 34px; }
+  label { color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+  #info { font-variant-numeric: tabular-nums; }
+  section { display: grid; gap: 8px; margin-top: 8px; }
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { padding: 6px 12px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
+  thead th { font-size: 12px; font-weight: 400; color: var(--muted); }
+  th:first-child { text-align: left; }
+  tbody tr:last-child > * { border-bottom: 0; }
+  tbody tr.current { background: var(--hl); }
+  .rowpick {
+    border: 0; background: none; padding: 0; min-height: 0; border-radius: 2px;
+    color: var(--ink); font-weight: 400; text-align: left;
+    text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px;
+  }
+  tr.current .rowpick { font-weight: 600; text-decoration-color: var(--accent); }
+  @media (max-width: 480px) {
+    th, td { padding-inline: 8px; }
+    thead th { white-space: normal; }
+    .chg { display: none; }
+  }
+  details.more { margin-top: 8px; }
+  details.more > summary { cursor: pointer; font-weight: 600; font-size: 15px; width: fit-content; }
+  .run { display: grid; gap: 10px; margin-top: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); }
+  .block { display: grid; gap: 4px; align-content: start; min-width: 0; }
+  .blockhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; }
+  .blockhead h3 { margin: 0; font-size: 12px; font-weight: 400; color: var(--muted); }
+  .blockhead button { min-height: 28px; padding: 2px 10px; font-size: 13px; }
+  pre {
+    margin: 0; padding: 10px 12px; overflow-x: auto; background: var(--code-bg);
+    border: 1px solid var(--line); border-radius: 6px; font: 12px/1.5 var(--mono);
+  }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header>
+    <div class="titlebar">
+      <h1>3D-PIC routing replay</h1>
+      <a class="repo" href="https://github.com/0x5859/3dpic-router">Source on GitHub</a>
+    </div>
+    <p class="setup">{{SETUP}}</p>
+    <div class="picker" role="radiogroup" aria-label="Boundary layout" id="picker">
+{{PICKER}}
+    </div>
+    <p class="summary"><span id="m-layout">{{BLURB}}</span><span id="m-result">{{RESULT}}</span></p>
+  </header>
+
+  <figure class="fig" id="fig">
+    <div class="kpis">
+      <div class="kpi hero"><span class="kl">Total crossings</span><span class="kv" id="k-total"></span></div>
+      <div class="kpi"><span class="kl">Interlayer crossings</span><span class="kv" id="k-inter"></span></div>
+    </div>
+    <div class="panels" id="panels"></div>
+    <div class="keys">
+      <span class="key">Crossings per edge <svg id="cbar" viewBox="0 0 232 30" aria-hidden="true"></svg></span>
+      <span class="key"><svg width="26" height="10" aria-hidden="true"><line x1="2" y1="5" x2="24" y2="5"
+        stroke="#1a1a1a" stroke-width="5.5" stroke-linecap="round"/><line x1="2" y1="5" x2="24" y2="5"
+        stroke="#7b9ff9" stroke-width="3" stroke-linecap="round"/></svg>Changed layer</span>
+    </div>
+    <div class="chartbox">
+      <div class="keys">
+        <span class="key"><svg width="22" height="10" aria-hidden="true"><line x1="1" y1="5" x2="21" y2="5"
+          stroke="#1b1f24" stroke-width="2" stroke-linecap="round"/></svg>Best so far</span>
+        <span class="key"><svg width="22" height="10" aria-hidden="true"><line x1="1" y1="5" x2="21" y2="5"
+          stroke="#b9c0c8" stroke-width="2" stroke-linecap="round"/></svg>Rest of run</span>
+        <span class="key"><svg width="16" height="10" aria-hidden="true"><rect x="0" y="0" width="16" height="10"
+          rx="2" fill="#3a7dc4" fill-opacity="0.16"/></svg>Evaluated range</span>
+      </div>
+      <div class="chart" id="chart"></div>
+    </div>
+    <details>
+      <summary>Table view</summary>
+      <div class="tv"><table>
+        <thead id="tv-head"></thead>
+        <tbody id="tv-body"></tbody>
+      </table></div>
+    </details>
+    <div class="tip" id="tip" hidden></div>
+  </figure>
+
+  <div class="controls">
+    <div class="steps">
+      <button id="first" type="button" title="First improvement (Home)" aria-label="First improvement">&#x23EE;</button>
+      <button id="prev" type="button" title="Previous (&#x2190;)" aria-label="Previous">&#x25C0;</button>
+    </div>
+    <button id="play" class="primary" type="button" title="Play / pause (Space)">Play</button>
+    <div class="steps">
+      <button id="next" type="button" title="Next (&#x2192;)" aria-label="Next">&#x25B6;</button>
+      <button id="last" type="button" title="Final result (End)" aria-label="Final result">&#x23ED;</button>
+    </div>
+    <input id="slider" type="range" min="0" max="0" value="0" aria-label="Frame">
+    <label for="speed">Speed
+      <select id="speed">
+        <option value="0.5">0.5&times;</option>
+        <option value="1" selected>1&times;</option>
+        <option value="2">2&times;</option>
+        <option value="4">4&times;</option>
+      </select>
+    </label>
+    <label for="loop"><input id="loop" type="checkbox"> Loop</label>
+  </div>
+
+  <p id="info" aria-live="polite"></p>
+
+  <section aria-labelledby="h-all">
+    <h2 id="h-all">All layouts</h2>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th scope="col">Layout</th><th scope="col">Crossings</th>
+            <th scope="col">Loss (dB)</th><th scope="col" class="chg">Change</th></tr>
+        </thead>
+        <tbody id="rows">
+{{ROWS}}
+        </tbody>
+      </table>
+    </div>
+    <p class="note">{{NOTE}}</p>
+  </section>
+
+  <details class="more">
+    <summary>Coordinates and commands</summary>
+    <div class="run">
+      <div class="block">
+        <div class="blockhead"><h3 id="h-json">layout.json</h3>
+          <button type="button" data-target="positions">Copy</button></div>
+        <pre id="positions" aria-labelledby="h-json">{{POSITIONS}}</pre>
+      </div>
+      <div class="block">
+        <div class="blockhead"><h3 id="h-cli">Command line, from code/</h3>
+          <button type="button" data-target="cli">Copy</button></div>
+        <pre id="cli" aria-labelledby="h-cli">{{CLI}}</pre>
+        <div class="blockhead"><h3 id="h-py">Python</h3>
+          <button type="button" data-target="python">Copy</button></div>
+        <pre id="python" aria-labelledby="h-py">{{PYTHON}}</pre>
+      </div>
+    </div>
+  </details>
+</main>
+
+<script>
+const INDEX = {{INDEX_JSON}};
+const DEFAULT = "{{DEFAULT}}";
+const SVGNS = "http://www.w3.org/2000/svg";
+const byKey = Object.fromEntries(INDEX.map((e) => [e.key, e]));
+const $ = (id) => document.getElementById(id);
+const fmt = new Intl.NumberFormat("en-US");
+const slider = $("slider"), playBtn = $("play"), info = $("info"), speed = $("speed"), loop = $("loop");
+const picks = Array.from(document.querySelectorAll(".pick"));
+const fig = $("fig"), tip = $("tip");
+let cur = null;      // layout entry
+let F = null;        // cur.fig
+let pos = 0;
+let timer = null;
+let panels = [];     // per layer: {svg, edges, hits, count, meta, label}
+let chart = null;    // chart elements + scales
+
+function el(name, attrs = {}, parent = null) {
+  const node = document.createElementNS(SVGNS, name);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  if (parent) parent.appendChild(node);
+  return node;
+}
+function frameLayers(f) { return f.l; }  // one digit per edge
+function color(c) { return F.palette[Math.min(c, F.palette.length - 1)]; }
+
+// ---- routing panels ------------------------------------------------
+function buildPanels() {
+  const box = $("panels");
+  box.replaceChildren();
+  box.style.gridTemplateColumns = `repeat(${F.L}, minmax(0, 1fr))`;
+  panels = [];
+  for (let j = 0; j < F.L; j++) {
+    const col = document.createElement("div");
+    col.className = "panel";
+    const head = document.createElement("div");
+    head.className = "ph";
+    const label = document.createElement("span");
+    label.className = "pl";
+    label.textContent = `Layer ${j}` + (j === F.ecl ? " · coupler" : "");
+    const value = document.createElement("span");
+    value.className = "pv";
+    const count = document.createElement("b");
+    const unit = document.createElement("span");
+    unit.textContent = " crossings";
+    value.append(count, unit);
+    const meta = document.createElement("span");
+    meta.className = "pm";
+    head.append(label, value, meta);
+    const svg = el("svg", { class: "net", viewBox: F.view.join(" "), role: "img" });
+    const edges = el("g", {}, svg);
+    const nodes = el("g", {}, svg);
+    const hits = el("g", {}, svg);
+    F.nodes.forEach(([x, y], n) => {
+      el("circle", { cx: x, cy: y, r: F.r }, nodes);
+      const t = el("text", { x, y, "font-size": F.font }, nodes);
+      t.textContent = n;
+    });
+    hits.addEventListener("pointerover", (ev) => edgeTip(ev, j, true));
+    hits.addEventListener("pointermove", (ev) => edgeTip(ev, j, true));
+    hits.addEventListener("pointerout", (ev) => edgeTip(ev, j, false));
+    col.append(head, svg);
+    box.appendChild(col);
+    panels.push({ svg, edges, nodes, hits, count, meta, label });
+  }
+  sizeNodes();
+}
+
+function sizeNodes() {
+  // Keep node markers and numbers legible at any panel width.
+  for (const p of panels) {
+    const s = p.svg.clientWidth / F.view[2];
+    if (!s) continue;
+    const r = Math.max(7, Math.min(12, F.r * s)) / s;
+    const fs = Math.max(8, Math.min(12, F.font * s)) / s;
+    for (const c of p.nodes.querySelectorAll("circle")) c.setAttribute("r", r);
+    for (const t of p.nodes.querySelectorAll("text")) t.setAttribute("font-size", fs);
+  }
+}
+
+function drawPanels(i) {
+  const f = F.frames[i];
+  const prev = i > 0 ? F.frames[i - 1] : null;
+  const L = frameLayers(f);
+  const nE = F.edges.length;
+  let moved = 0;
+  const isMoved = new Array(nE);
+  for (let e = 0; e < nE; e++) {
+    isMoved[e] = prev !== null && L[e] !== prev.l[e];
+    if (isMoved[e]) moved++;
+  }
+  const highlight = moved <= Math.max(12, 0.08 * nE);
+  let total = 0;
+  panels.forEach((p, j) => {
+    const lay = String(j);
+    let outline = "", lines = "", moveLines = "", hits = "", crossings = 0, count = 0, movedIn = 0;
+    for (let e = 0; e < nE; e++) {
+      if (L[e] !== lay) continue;
+      count++;
+      crossings += f.c[e];
+      const d = F.paths[e];
+      const hot = isMoved[e] && highlight;
+      if (isMoved[e]) movedIn++;
+      const path = `<path class="e${hot ? " mv" : ""}" data-e="${e}" stroke="${color(f.c[e])}" d="${d}"/>`;
+      if (hot) { outline += `<path class="o" d="${d}"/>`; moveLines += path; } else { lines += path; }
+      hits += `<path class="h" data-e="${e}" d="${d}"/>`;
+    }
+    p.edges.innerHTML = lines + outline + moveLines;
+    p.hits.innerHTML = hits;
+    const pairs = crossings / 2;
+    total += pairs;
+    p.count.textContent = fmt.format(pairs);
+    p.meta.textContent = `${count} edges` + (movedIn ? ` · ${movedIn} moved in` : "");
+    p.svg.setAttribute("aria-label", `${p.label.textContent}: ${count} edges, ${pairs} crossings`);
+  });
+  $("k-total").textContent = fmt.format(total);
+  $("k-inter").textContent = fmt.format(f.i);
+}
+
+function edgeTip(ev, j, on) {
+  const e = ev.target.getAttribute && ev.target.getAttribute("data-e");
+  const p = panels[j];
+  for (const x of p.edges.querySelectorAll(".e.hl")) x.classList.remove("hl");
+  if (!on || e === null) { tip.hidden = true; return; }
+  const line = p.edges.querySelector(`.e[data-e="${e}"]`);
+  if (line) line.classList.add("hl");
+  const [u, v] = F.edges[+e];
+  const c = F.frames[pos].c[+e];
+  showTip(ev, `${c} crossing${c === 1 ? "" : "s"}`, [`Link ${u}–${v}`, p.label.textContent]);
+}
+
+function showTip(ev, strong, rows) {
+  const box = fig.getBoundingClientRect();
+  tip.replaceChildren();
+  const s = document.createElement("strong");
+  s.textContent = strong;
+  tip.appendChild(s);
+  for (const r of rows) {
+    const span = document.createElement("span");
+    span.textContent = r;
+    tip.appendChild(span);
+  }
+  tip.hidden = false;
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = ev.clientX - box.left + 14, y = ev.clientY - box.top + 14;
+  if (x + w > box.width - 4) x = ev.clientX - box.left - w - 14;
+  if (y + h > box.height - 4) y = ev.clientY - box.top - h - 14;
+  tip.style.left = `${Math.max(4, x)}px`;
+  tip.style.top = `${Math.max(4, y)}px`;
+}
+
+// ---- colorbar ------------------------------------------------------
+function drawColorbar() {
+  const svg = $("cbar");
+  svg.replaceChildren();
+  const defs = el("defs", {}, svg);
+  const grad = el("linearGradient", { id: "cbg", x1: "0", x2: "1", y1: "0", y2: "0" }, defs);
+  for (const [o, c] of F.stops) el("stop", { offset: o, "stop-color": c }, grad);
+  const w = 220, x0 = 6, vmax = F.palette.length - 1;
+  el("rect", { x: x0, y: 1, width: w, height: 10, rx: 2, fill: "url(#cbg)" }, svg);
+  for (const t of F.cticks) {
+    const x = x0 + (t / vmax) * w;
+    el("line", { x1: x, x2: x, y1: 11, y2: 15, stroke: "#8a939e", "stroke-width": 1 }, svg);
+    const tx = el("text", { x, y: 26, "text-anchor": "middle" }, svg);
+    tx.textContent = t;
+  }
+}
+
+// ---- loss chart ----------------------------------------------------
+function buildChart() {
+  const box = $("chart");
+  box.replaceChildren();
+  const svg = el("svg", { role: "img", "aria-label": "Best mean edge loss against evaluations" }, box);
+  chart = { box, svg };
+  layoutChart();
+}
+
+function layoutChart() {
+  const { box, svg } = chart;
+  const C = F.curve;
+  const W = box.clientWidth, H = box.clientHeight;
+  const m = { l: 54, r: 12, t: 8, b: 36 };
+  const a = Math.log10(C.x0), b = Math.log10(C.x1);
+  const X = (v) => m.l + (Math.log10(v) - a) / (b - a) * (W - m.l - m.r);
+  const Y = (v) => m.t + (C.y1 - v) / (C.y1 - C.y0) * (H - m.t - m.b);
+  Object.assign(chart, { W, H, m, X, Y });
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.replaceChildren();
+  const defs = el("defs", {}, svg);
+  const plot = el("clipPath", { id: "plotclip" }, defs);
+  el("rect", { x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b }, plot);
+  const band = el("clipPath", { id: "bandclip" }, defs);
+  chart.bandRect = el("rect", { x: m.l, y: 0, width: 0, height: H }, band);
+
+  // Grid: solid hairlines at the major ticks.
+  const grid = el("g", { stroke: "var(--fig-grid)", "stroke-width": 1, "shape-rendering": "crispEdges" }, svg);
+  const decs = [];
+  for (let p = Math.ceil(a); p <= Math.floor(b); p++) decs.push(10 ** p);
+  for (const v of decs) el("line", { x1: X(v), x2: X(v), y1: m.t, y2: H - m.b }, grid);
+  for (const v of C.yticks) el("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v) }, grid);
+
+  // Evaluated range (min/max of every evaluated loss), revealed up to "now".
+  if (C.ex.length > 1) {
+    let d = `M${X(C.ex[0])} ${Y(C.hi[0])}`;
+    for (let i = 0; i < C.ex.length - 1; i++) d += `H${X(C.ex[i + 1])}V${Y(C.hi[i + 1])}`;
+    for (let i = C.ex.length - 1; i > 0; i--) d += `V${Y(C.lo[i - 1])}H${X(C.ex[i - 1])}`;
+    const g = el("g", { "clip-path": "url(#plotclip)" }, svg);
+    el("path", { d: d + "Z", fill: "var(--fig-band)", "fill-opacity": 0.16, "clip-path": "url(#bandclip)" }, g);
+  }
+  // The whole best-so-far curve in gray (the part still ahead shows through).
+  const end = Math.max(C.evals, C.bx[C.bx.length - 1]);
+  let rest = `M${X(C.bx[0])} ${Y(C.by[0])}`;
+  for (let i = 1; i < C.bx.length; i++) rest += `H${X(C.bx[i])}V${Y(C.by[i])}`;
+  rest += `H${X(end)}`;
+  const lines = el("g", { "clip-path": "url(#plotclip)", fill: "none", "stroke-linecap": "round",
+                          "stroke-linejoin": "round", "stroke-width": 2 }, svg);
+  el("path", { d: rest, stroke: "var(--fig-rest)" }, lines);
+  chart.best = el("path", { stroke: "var(--fig-best)" }, lines);
+
+  // Axes, ticks, labels.
+  const ax = el("g", { stroke: "var(--fig-axis)", "stroke-width": 1, "shape-rendering": "crispEdges" }, svg);
+  el("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b }, ax);
+  el("line", { x1: m.l, x2: m.l, y1: m.t, y2: H - m.b }, ax);
+  for (let p = Math.floor(a); p <= Math.ceil(b); p++) {
+    for (let k = 2; k <= 9; k++) {
+      const v = k * 10 ** p;
+      if (v > C.x0 && v < C.x1) el("line", { x1: X(v), x2: X(v), y1: H - m.b, y2: H - m.b + 3 }, ax);
+    }
+  }
+  for (const v of decs) {
+    el("line", { x1: X(v), x2: X(v), y1: H - m.b, y2: H - m.b + 5 }, ax);
+    const t = el("text", { x: X(v), y: H - m.b + 16, "text-anchor": "middle" }, svg);
+    t.textContent = fmt.format(v);
+  }
+  const dec = Math.max(0, ...C.yticks.map((v) => {
+    for (let d = 0; d < 5; d++) if (Math.abs(+v.toFixed(d) - v) < 1e-9) return d;
+    return 4;
+  }));
+  for (const v of C.yticks) {
+    el("line", { x1: m.l - 4, x2: m.l, y1: Y(v), y2: Y(v) }, ax);
+    const t = el("text", { x: m.l - 7, y: Y(v), "text-anchor": "end", "dominant-baseline": "central" }, svg);
+    t.textContent = v.toFixed(dec);
+  }
+  const xt = el("text", { class: "ttl", x: m.l + (W - m.l - m.r) / 2, y: H - 3, "text-anchor": "middle" }, svg);
+  xt.textContent = "Evaluations";
+  const yt = el("text", { class: "ttl", transform: `translate(12 ${m.t + (H - m.t - m.b) / 2}) rotate(-90)`,
+                          "text-anchor": "middle" }, svg);
+  yt.textContent = "Mean edge loss (dB)";
+
+  // Crosshair, marker, hover layer.
+  chart.cross = el("line", { y1: m.t, y2: H - m.b, stroke: "var(--fig-muted)", "stroke-width": 1,
+                             "shape-rendering": "crispEdges", visibility: "hidden" }, svg);
+  chart.mark = el("circle", { r: 4.5, fill: "var(--fig-mark)", stroke: "var(--fig-bg)", "stroke-width": 2 }, svg);
+  const hover = el("rect", { x: m.l, y: m.t, width: Math.max(0, W - m.l - m.r), height: Math.max(0, H - m.t - m.b),
+                             fill: "transparent", style: "cursor: pointer" }, svg);
+  hover.addEventListener("pointermove", chartHover);
+  hover.addEventListener("pointerleave", () => { chart.cross.setAttribute("visibility", "hidden"); tip.hidden = true; });
+  hover.addEventListener("click", (ev) => { const i = nearestFrame(ev); stop(); show(i); });
+  drawChart(pos);
+}
+
+function nearestFrame(ev) {
+  const r = chart.svg.getBoundingClientRect();
+  const px = (ev.clientX - r.left) * (chart.W / r.width);
+  const C = F.curve, a = Math.log10(C.x0), b = Math.log10(C.x1);
+  const lv = a + (px - chart.m.l) / (chart.W - chart.m.l - chart.m.r) * (b - a);
+  let best = 0, dist = Infinity;
+  F.frames.forEach((f, i) => {
+    const dd = Math.abs(Math.log10(f.x) - lv);
+    if (dd < dist - 1e-12) { dist = dd; best = i; }
+  });
+  return best;
+}
+
+function chartHover(ev) {
+  const i = nearestFrame(ev);
+  const f = F.frames[i];
+  const x = chart.X(f.x);
+  chart.cross.setAttribute("x1", x);
+  chart.cross.setAttribute("x2", x);
+  chart.cross.setAttribute("visibility", "visible");
+  const head = f.f ? "Final result" : `Improvement ${i + 1}`;
+  const total = crossingsOf(f).reduce((s, v) => s + v, 0);
+  showTip(ev, `${f.y.toFixed(4)} dB`, [head, `evaluation ${fmt.format(f.x)}`, `${fmt.format(total)} crossings`]);
+}
+
+function drawChart(i) {
+  const f = F.frames[i], C = F.curve;
+  const xNow = f.f ? C.evals : f.x;
+  let d = `M${chart.X(C.bx[0])} ${chart.Y(C.by[0])}`;
+  for (let k = 1; k <= i; k++) d += `H${chart.X(C.bx[k])}V${chart.Y(C.by[k])}`;
+  d += `H${chart.X(Math.max(xNow, 1))}`;
+  chart.best.setAttribute("d", d);
+  chart.mark.setAttribute("cx", chart.X(f.x));
+  chart.mark.setAttribute("cy", chart.Y(f.y));
+  const xr = chart.X(Math.min(Math.max(xNow, 1), C.evals) + 1);
+  chart.bandRect.setAttribute("width", Math.max(0, xr - chart.m.l));
+}
+
+// ---- table view ----------------------------------------------------
+function crossingsOf(f) {
+  const out = new Array(F.L).fill(0);
+  for (let e = 0; e < f.c.length; e++) out[+f.l[e]] += f.c[e];
+  return out.map((v) => v / 2);
+}
+function buildTable() {
+  const head = $("tv-head"), body = $("tv-body");
+  const tr = document.createElement("tr");
+  const cols = ["#", "Evaluation", "Loss (dB)"];
+  for (let j = 0; j < F.L; j++) cols.push(`Layer ${j}`);
+  cols.push("Total", "Interlayer");
+  for (const c of cols) {
+    const th = document.createElement("th");
+    th.scope = "col";
+    th.textContent = c;
+    tr.appendChild(th);
+  }
+  head.replaceChildren(tr);
+  body.replaceChildren(...F.frames.map((f, i) => {
+    const row = document.createElement("tr");
+    const th = document.createElement("th");
+    th.scope = "row";
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "rowpick";
+    b.textContent = f.f ? "Final" : String(i + 1);
+    b.addEventListener("click", () => { stop(); show(i); });
+    th.appendChild(b);
+    row.appendChild(th);
+    const per = crossingsOf(f);
+    const cells = [fmt.format(f.x), f.y.toFixed(4), ...per.map((v) => fmt.format(v)),
+                   fmt.format(per.reduce((s, v) => s + v, 0)), fmt.format(f.i)];
+    for (const c of cells) {
+      const td = document.createElement("td");
+      td.textContent = c;
+      row.appendChild(td);
+    }
+    return row;
+  }));
+}
+
+// ---- playback -------------------------------------------------------
+function count() { return F.frames.length; }
+function show(i) {
+  pos = Math.max(0, Math.min(count() - 1, i));
+  drawPanels(pos);
+  drawChart(pos);
+  info.textContent = F.frames[pos].s;
+  slider.value = pos;
+  const rows = $("tv-body").children;
+  for (let k = 0; k < rows.length; k++) rows[k].classList.toggle("current", k === pos);
+}
+function delay() {
+  const base = 1000 / (F.fps * parseFloat(speed.value));
+  return pos === count() - 1 ? Math.max(base, 1500) : base;
+}
+function tick() {
+  if (pos < count() - 1) { show(pos + 1); timer = setTimeout(tick, delay()); }
+  else if (loop.checked) { show(0); timer = setTimeout(tick, delay()); }
+  else { stop(); }
+}
+function play() {
+  if (pos >= count() - 1) show(0);
+  playBtn.textContent = "Pause";
+  timer = setTimeout(tick, delay());
+}
+function stop() { clearTimeout(timer); timer = null; playBtn.textContent = "Play"; }
+function toggle() { if (timer) { stop(); } else { play(); } }
+
+function select(key) {
+  if (!byKey[key]) return;
+  stop();
+  tip.hidden = true;
+  cur = byKey[key];
+  F = cur.fig;
+  pos = F.frames.length - 1;  // before anything redraws with the old index
+  $("m-layout").textContent = cur.blurb;
+  $("m-result").textContent = cur.result;
+  $("positions").textContent = cur.positions;
+  for (const p of picks) {
+    const on = p.dataset.key === key;
+    p.setAttribute("aria-checked", on ? "true" : "false");
+    p.tabIndex = on ? 0 : -1;
+  }
+  for (const tr of document.querySelectorAll("#rows tr")) tr.classList.toggle("current", tr.dataset.key === key);
+  buildPanels();
+  drawColorbar();
+  buildTable();
+  buildChart();
+  slider.max = count() - 1;
+  show(count() - 1);
+  // Keep the address shareable: #<layout> for every layout but the default.
+  const hash = key === DEFAULT ? "" : `#${key}`;
+  if (location.hash !== hash) {
+    try { history.replaceState(null, "", hash || location.pathname + location.search); } catch (err) { /* no history API */ }
+  }
+}
+
+for (const p of picks) {
+  p.addEventListener("click", () => { if (p.dataset.key !== cur.key) select(p.dataset.key); });
+}
+$("picker").addEventListener("keydown", (e) => {
+  const i = picks.findIndex((p) => p.dataset.key === cur.key);
+  let j = null;
+  if (e.key === "ArrowRight" || e.key === "ArrowDown") j = (i + 1) % picks.length;
+  else if (e.key === "ArrowLeft" || e.key === "ArrowUp") j = (i - 1 + picks.length) % picks.length;
+  else if (e.key === "Home") j = 0;
+  else if (e.key === "End") j = picks.length - 1;
+  if (j === null) return;
+  e.preventDefault();
+  e.stopPropagation();
+  select(picks[j].dataset.key);
+  picks[j].focus();
+});
+for (const b of document.querySelectorAll("#rows .rowpick")) {
+  b.addEventListener("click", () => select(b.dataset.key));
+}
+for (const b of document.querySelectorAll("[data-target]")) {
+  b.addEventListener("click", async () => {
+    const pre = $(b.dataset.target);
+    try {
+      await navigator.clipboard.writeText(pre.textContent);
+      b.textContent = "Copied";
+    } catch (err) {
+      const range = document.createRange();
+      range.selectNodeContents(pre);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      b.textContent = "Selected";
+    }
+    setTimeout(() => { b.textContent = "Copy"; }, 1600);
+  });
+}
+
+playBtn.addEventListener("click", toggle);
+$("first").addEventListener("click", () => { stop(); show(0); });
+$("last").addEventListener("click", () => { stop(); show(count() - 1); });
+$("prev").addEventListener("click", () => { stop(); show(pos - 1); });
+$("next").addEventListener("click", () => { stop(); show(pos + 1); });
+slider.addEventListener("input", () => { stop(); show(parseInt(slider.value, 10)); });
+document.addEventListener("keydown", (e) => {
+  const tag = e.target.tagName;
+  if (tag === "SELECT" || tag === "PRE" || tag === "SUMMARY"
+      || (tag === "INPUT" && e.target.type === "checkbox")) return;
+  if (e.key === " ") { if (tag === "BUTTON") return; e.preventDefault(); toggle(); }
+  else if (e.key === "ArrowRight") { e.preventDefault(); stop(); show(pos + 1); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); stop(); show(pos - 1); }
+  else if (e.key === "Home") { e.preventDefault(); stop(); show(0); }
+  else if (e.key === "End") { e.preventDefault(); stop(); show(count() - 1); }
+});
+
+let resizeQueued = false;
+new ResizeObserver(() => {
+  if (resizeQueued || !F) return;
+  resizeQueued = true;
+  requestAnimationFrame(() => { resizeQueued = false; sizeNodes(); layoutChart(); });
+}).observe($("fig"));
+
+window.addEventListener("hashchange", () => {
+  const key = location.hash.slice(1);
+  if (byKey[key] && key !== cur.key) select(key);
+});
+const fromHash = location.hash.slice(1);
+select(byKey[fromHash] ? fromHash : DEFAULT);
+</script>
+</body>
+</html>
