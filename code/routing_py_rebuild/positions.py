@@ -1,7 +1,16 @@
-"""Geometric helpers that produce node-position dicts for SiN graphs."""
+"""Geometric helpers that produce node-position dicts for SiN graphs.
+
+Besides the shape generators, :func:`load_positions_json` reads arbitrary
+node coordinates from a JSON file (the C++ ``SINIC_POSITIONS_JSON``
+format) and :func:`perimeter_is_simple` checks that their index order
+walks the boundary, which the perimeter-ring pin assumes.
+"""
 from __future__ import annotations
 
+import json
 import math
+import re
+from pathlib import Path
 
 
 def _require_int(name: str, value: object, minimum: int) -> int:
@@ -300,3 +309,82 @@ POSITIONS_12_NODES = {
     4: (4, 2), 5: (4, 1), 6: (3, 0), 7: (2, 0),
     8: (1, 0), 9: (0, 1), 10: (0, 2), 11: (0, 3),
 }
+
+
+_CANONICAL_KEY = re.compile(r"0|[1-9][0-9]*")
+
+
+def _is_coordinate(value: object) -> bool:
+    """A finite JSON number (not ``true`` / ``false``, not an integer too
+    large for a float)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def load_positions_json(path: str | Path) -> dict[int, tuple[float, float]]:
+    """Read node coordinates ``{"<node>": [x, y], ...}`` from a JSON file.
+
+    Same contract as the C++ loader behind ``SINIC_POSITIONS_JSON``: keys
+    are canonical non-negative integers (``"0"``, ``"12"``; no sign,
+    space or leading zero) forming the contiguous set ``0 .. k-1``, and
+    each value is a two-number array. The index order must walk the
+    boundary (see :func:`perimeter_is_simple`). A saved
+    ``subgraphsdata.json`` or ``optimization_history.json`` is accepted
+    too: its ``positions`` block is used, so a run's layout can be reused.
+
+    Returns ``{node: (x, y)}`` ordered by node; ``k`` is its length.
+    Raises ``ValueError`` naming the file on any violation.
+    """
+    path = Path(path)
+    try:
+        with open(path) as f:
+            payload = json.load(f)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: malformed JSON: {exc}") from exc
+    if isinstance(payload, dict) and isinstance(payload.get("positions"), dict):
+        payload = payload["positions"]
+    if not isinstance(payload, dict) or not payload:
+        raise ValueError(
+            f'{path}: expected a non-empty object {{"<node>": [x, y], ...}}.'
+        )
+    positions: dict[int, tuple[float, float]] = {}
+    for key, value in payload.items():
+        if not _CANONICAL_KEY.fullmatch(key):
+            raise ValueError(
+                f"{path}: node key {key!r} must be a canonical non-negative "
+                f'integer ("0" or [1-9][0-9]*; no sign, space or leading zero).'
+            )
+        if not (isinstance(value, list) and len(value) == 2
+                and all(_is_coordinate(c) for c in value)):
+            raise ValueError(
+                f"{path}: node {key} must map to a two-number array [x, y]; got {value!r}."
+            )
+        positions[int(key)] = (float(value[0]), float(value[1]))
+    k = len(positions)
+    missing = sorted(set(range(k)) - set(positions))
+    if missing:
+        raise ValueError(
+            f"{path}: node keys must be the contiguous set 0..{k - 1} (missing {missing[0]})."
+        )
+    return {n: positions[n] for n in range(k)}
+
+
+def perimeter_is_simple(positions: dict) -> bool:
+    """True when walking nodes ``0, 1, ..., k-1`` and back to ``0`` traces
+    a closed boundary that never crosses itself.
+
+    The optimizer pins the perimeter ring (edges ``i -> i+1`` and
+    ``k-1 -> 0``) to one layer, so node indices have to follow the
+    boundary; a crossing ring means they do not (e.g. the nodes of a
+    rectangle numbered row by row instead of around it).
+    """
+    from shapely.geometry import LinearRing
+
+    k = len(positions)
+    if k < 3:
+        return False
+    return bool(LinearRing([positions[i] for i in range(k)]).is_simple)

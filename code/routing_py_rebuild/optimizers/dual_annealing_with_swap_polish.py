@@ -26,7 +26,7 @@ import numpy as np
 from scipy.optimize import dual_annealing
 
 from ..statistics import IterEvent
-from .base import OptimizationResult, Optimizer, register_optimizer
+from .base import OptimizationResult, Optimizer, observer_copy, register_optimizer
 
 
 @register_optimizer("dual_annealing_with_swap_polish")
@@ -91,7 +91,7 @@ class DualAnnealingWithSwapPolishOptimizer(Optimizer):
                 )
             )
             if self.eval_observer is not None:
-                self.eval_observer(x, float(loss))
+                self.eval_observer(observer_copy(x), float(loss))
             return loss
 
         polish_iters = int(self.kwargs.pop("polish_iters", 2000))

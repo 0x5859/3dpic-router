@@ -202,7 +202,7 @@ int main() {
     const int dualsa_iter      = env_int("DUALSA_ITER", 500);
     const auto cl_values       = env_list("CL_VALUES",  {0.1});
     const auto tl_values       = env_list("TL_VALUES",  {0.05});
-    const auto itl_values      = env_list("ITL_VALUES", {0.0});
+    const auto itl_values      = env_list("ITL_VALUES", {0.001});
     const std::string base_path = env_str("OUTPUT_DIR", "./output/");
     // C1 (REFACTOR_GOALS.md §1-2): SINIC_POSITIONS_JSON — when set, load
     // node positions from that JSON file instead of the built-in square

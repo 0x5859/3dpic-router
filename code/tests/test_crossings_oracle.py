@@ -22,7 +22,9 @@ Also smoke-tests the §3-2 ``initial_crossing_count_ms`` /
 """
 from __future__ import annotations
 
+import functools
 import json
+import math
 from pathlib import Path
 
 import networkx as nx
@@ -275,18 +277,20 @@ def test_phase_a_fallback_matches_brute_force(seed: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Phase A — collinear-dense boundary layouts (geometric fallback).
+# Phase A — collinear side runs (triangle / regular polygon).
 #
-# Triangle / regular-polygon layouts place many nodes on each straight side,
-# so per-side node triples are collinear only to within float64
-# representation error (~1e-17). ``_is_cyclic_convex_positions`` rejects
-# these (collinear edge runs -> zero-turn), so they take the geometric
-# fallback. A non-robust float orientation determinant disagrees with
-# shapely/GEOS's robust predicate on exactly these near-degenerate triples,
-# which previously made the cached pair set diverge from the brute-force
-# ``edge_crosses`` ground truth (e.g. triangle k=12: 471 cached vs 463
-# brute). The fallback's exact-orientation predicate must reproduce
-# ``edge_crosses`` pair-for-pair here too. REFACTOR_GOALS.md §2-1.
+# Triangle and regular-polygon layouts place several nodes on each straight
+# side. Interpolation leaves those side nodes ~1e-17 (relative) off their
+# line with either sign, so an exact-zero turn test rejected the layouts and
+# the geometric fallback then resolved every near-collinear configuration by
+# round-off: triangle k=12 gave 463 pairs, and 471 once the coordinates were
+# rounded to 12 decimals. ``_is_cyclic_convex_positions`` treats a turn with
+# |sin| <= ``_COLLINEAR_TOL`` as a straight step, so these layouts take the
+# cyclic fast path. With every node on a convex outline, ``edge_crosses``
+# semantics (T-junctions and partial collinear overlaps cross, containment
+# does not) reduce to the alternating-endpoints rule, so they cross exactly
+# like the circle with the same node order — whose brute-force set has no
+# collinear nodes for round-off to get wrong. REFACTOR_GOALS.md §2-1.
 # ---------------------------------------------------------------------------
 
 
@@ -298,59 +302,82 @@ def _triangle_positions(k: int) -> dict[int, tuple[float, float]]:
     return distribute_nodes_around_triangle(counts)
 
 
+@functools.cache
+def _convex_reference_pairs(k: int) -> frozenset[tuple[int, int]]:
+    """Brute-force ``edge_crosses`` pairs of the circle with ``k`` nodes:
+    the crossing set of every layout with its nodes on a convex outline in
+    index order, free of collinear nodes."""
+    graph = SiNInterconnectionGraph(k=k, positions=distribute_nodes(shape="circle", k=k))
+    return frozenset(_brute_force_pair_set(graph))
+
+
+def _cached_pairs(positions: dict[int, tuple[float, float]]) -> set[tuple[int, int]]:
+    graph = SiNInterconnectionGraph(k=len(positions), positions=positions, L=3)
+    graph.build_crossings_index()
+    return set(map(tuple, graph._crossing_pairs.tolist()))
+
+
+def test_square_collinear_sides_cross_like_the_circle() -> None:
+    """Grounds the reference: the square's side nodes are exactly collinear
+    (exact float coordinates), and its brute-force ``edge_crosses`` set —
+    T-junctions and partial overlaps included — equals the circle's."""
+    for k in (12, 20):
+        square = SiNInterconnectionGraph(
+            k=k, positions=distribute_nodes(shape="square", nodes_per_side=k // 4)
+        )
+        assert _brute_force_pair_set(square) == _convex_reference_pairs(k)
+
+
 @pytest.mark.parametrize("k", [9, 12, 20])
-def test_phase_a_collinear_triangle_matches_brute_force(k: int) -> None:
-    """Triangle boundary layout (collinear per-side runs) hits the geometric
-    fallback; the cached pair set must equal the brute-force ``edge_crosses``
-    set exactly. Pre-fix this diverged (k=12: 471 vs 463; k=20: 4628 vs
-    4460) because the naive float orientation determinant disagreed with
-    shapely on near-collinear side points.
+def test_phase_a_collinear_triangle_takes_fast_path(k: int) -> None:
+    """Triangle boundary layout (collinear per-side runs, ~1e-17 off their
+    lines): the convexity detector accepts it, its pairs are the convex
+    reference set (C(k, 4) of them), and rounding the coordinates — which
+    used to move the fallback's count from 463 to 471 at k=12 — changes
+    nothing.
     """
     positions = _triangle_positions(k)
     graph = SiNInterconnectionGraph(k=k, positions=positions, L=3)
-    assert not graph._is_cyclic_convex_positions(), (
-        "collinear-side triangle is (correctly) rejected by the convexity "
-        "detector and must take the geometric fallback"
+    assert graph._is_cyclic_convex_positions(), (
+        "collinear-side triangle must take the cyclic fast path"
     )
-    graph.build_crossings_index()
-    cached = set(map(tuple, graph._crossing_pairs.tolist()))
-    expected = _brute_force_pair_set(graph)
-    assert cached == expected, (
-        f"triangle k={k}: cached pair set diverges from edge_crosses; "
-        f"len(cached)={len(cached)} len(expected)={len(expected)} "
-        f"missing={sorted(expected - cached)[:5]} "
-        f"extra={sorted(cached - expected)[:5]}"
-    )
+    cached = _cached_pairs(positions)
+    assert cached == _convex_reference_pairs(k)
+    assert len(cached) == math.comb(k, 4)
+    rounded = {n: (round(x, 12), round(y, 12)) for n, (x, y) in positions.items()}
+    assert _cached_pairs(rounded) == cached
 
 
 @pytest.mark.parametrize(
     "n_sides,nodes_per_side",
     [(3, 4), (4, 3), (5, 4), (3, 7)],
 )
-def test_phase_a_collinear_polygon_matches_brute_force(
+def test_phase_a_collinear_polygon_takes_fast_path(
     n_sides: int, nodes_per_side: int
 ) -> None:
     """Regular-polygon boundary layout (collinear per-side runs, k =
-    n_sides * nodes_per_side incl. k=12 and k=20) hits the geometric
-    fallback; the cached pair set must equal the brute-force
-    ``edge_crosses`` set exactly.
+    n_sides * nodes_per_side incl. k=12 and k=20): accepted by the
+    convexity detector, crossing like the convex reference.
     """
     k = n_sides * nodes_per_side
     positions = distribute_nodes_around_polygon(n_sides, nodes_per_side)
     graph = SiNInterconnectionGraph(k=k, positions=positions, L=3)
-    assert not graph._is_cyclic_convex_positions(), (
-        "collinear-side polygon is (correctly) rejected by the convexity "
-        "detector and must take the geometric fallback"
+    assert graph._is_cyclic_convex_positions(), (
+        "collinear-side polygon must take the cyclic fast path"
     )
-    graph.build_crossings_index()
-    cached = set(map(tuple, graph._crossing_pairs.tolist()))
-    expected = _brute_force_pair_set(graph)
-    assert cached == expected, (
-        f"polygon {n_sides}x{nodes_per_side} (k={k}): cached pair set "
-        f"diverges; len(cached)={len(cached)} len(expected)={len(expected)} "
-        f"missing={sorted(expected - cached)[:5]} "
-        f"extra={sorted(cached - expected)[:5]}"
-    )
+    assert _cached_pairs(positions) == _convex_reference_pairs(k)
+
+
+def test_phase_a_collinear_tolerance_is_round_off_only() -> None:
+    """The straight-step tolerance covers round-off, not geometry: a real
+    dent (a side node pushed 1e-6 of the side inward) and a straight step
+    that reverses direction both still fail the convexity check."""
+    dented = distribute_nodes(shape="square", nodes_per_side=3)  # side 4
+    x, y = dented[1]  # top side, middle node
+    dented[1] = (x, y - 4e-6)
+    assert not SiNInterconnectionGraph(k=12, positions=dented)._is_cyclic_convex_positions()
+    row = {0: (1.0, 0.0), 1: (2.0, 0.0), 2: (3.0, 0.0), 3: (4.0, 0.0)}
+    assert not SiNInterconnectionGraph(k=4, positions=row)._is_cyclic_convex_positions()
 
 
 # ---------------------------------------------------------------------------

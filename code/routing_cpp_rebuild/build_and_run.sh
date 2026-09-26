@@ -11,7 +11,7 @@
 #   -i, --iter N                 Dual-annealing iterations.   Default: 500.
 #       --cl  "a,b,c"            Crossing-loss values.        Default: 0.1
 #       --tl  "a,b,c"            Taper-loss values.           Default: 0.05
-#       --itl "a,b,c"            Interlayer-loss values.      Default: 0
+#       --itl "a,b,c"            Interlayer-loss values.      Default: 0.001
 #       --out DIR                Output directory.            Default: ./output/
 #       --no-run                 Build only, don't execute.
 #   -h, --help                   Show this help and exit.

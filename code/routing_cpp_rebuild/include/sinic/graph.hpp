@@ -73,7 +73,7 @@ public:
         const PositionMap& positions,
         double loss_crossing            = 0.1,
         double loss_taper               = 0.05,
-        double loss_interlayer_crossing = 0.0,
+        double loss_interlayer_crossing = 0.001,
         int    num_layers               = 2,
         int    edge_coupler_layer       = 0,
         int    perimeter_layer          = -1,    // -1 sentinel → = edge_coupler_layer

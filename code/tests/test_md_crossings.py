@@ -55,6 +55,10 @@ def _positions_for(shape: str, k: int) -> dict:
         ``k % 4 == 0``); ``k`` total = ``n_sides * per_side``.
       * ``partial_rectangle``: near-even 3-split over
         ``{top,right,bottom}`` summing to ``k``.
+      * ``notched_square``: the square with its top-middle node pushed
+        to y = 2.7 (side 4), a non-convex outline whose notch edges are
+        genuinely crossed by chords passing over it (requires
+        ``k % 4 == 0``).
     """
     if shape == "square":
         if k % 4 != 0:
@@ -78,6 +82,13 @@ def _positions_for(shape: str, k: int) -> dict:
             shape="partial_rectangle",
             side_counts={"top": a, "right": b, "bottom": c},
         )
+    if shape == "notched_square":
+        if k % 4 != 0:
+            raise ValueError(f"notched_square needs k % 4 == 0; got k={k}")
+        positions = distribute_nodes(shape="square", nodes_per_side=k // 4)
+        mid = (k // 4) // 2  # top side runs 0 .. k/4 - 1
+        positions[mid] = (positions[mid][0], 2.7)
+        return positions
     raise ValueError(f"unsupported shape {shape!r}")
 
 
@@ -154,11 +165,25 @@ def _pinned_layers(g: SiNInterconnectionGraph, layers: np.ndarray) -> np.ndarray
     return pinned
 
 
-def _brute_force_intralayer(g: SiNInterconnectionGraph, layers: np.ndarray) -> int:
+# Triangle and polygon side nodes come from interpolation: collinear only
+# up to round-off, so ``edge_crosses`` on their float coordinates is not
+# the intended geometry. With every node on a convex outline in index order
+# they cross exactly like the circle with the same k, which has no
+# collinear nodes for round-off to get wrong (test_crossings_oracle.py,
+# "collinear side runs").
+_ROUNDOFF_COLLINEAR = frozenset({"triangle", "polygon"})
+
+
+def _brute_force_intralayer(
+    g: SiNInterconnectionGraph, layers: np.ndarray, shape: str
+) -> int:
     """Independent O(E²) ground truth: shapely edge_crosses pair set
     (no Phase A) classified by the same pinned-layer + [0, L) gate."""
     pinned = _pinned_layers(g, layers)
-    pairs = _brute_force_pair_set(g)  # set of (i, j) edge-index pairs, i<j
+    ref = g
+    if shape in _ROUNDOFF_COLLINEAR:
+        ref = SiNInterconnectionGraph(k=g.k, positions=_positions_for("circle", g.k))
+    pairs = _brute_force_pair_set(ref)  # set of (i, j) edge-index pairs, i<j
     total = 0
     for i, j in pairs:
         a = pinned[i]
@@ -205,7 +230,7 @@ def _run_report_intralayer(
     return via_attr
 
 
-_SHAPES = ["square", "circle", "triangle", "polygon", "partial_rectangle"]
+_SHAPES = ["square", "circle", "triangle", "polygon", "partial_rectangle", "notched_square"]
 
 
 @pytest.mark.parametrize("shape", _SHAPES)
@@ -222,7 +247,7 @@ def test_three_way_oracle_python(shape: str, k: int, seed: int) -> None:
     layers = rng.integers(0, L, size=n).astype(float)
 
     harness = count_intralayer_geometric(g, layers)
-    brute = _brute_force_intralayer(g, layers)
+    brute = _brute_force_intralayer(g, layers, shape)
     report = _run_report_intralayer(shape, k, L, layers)
 
     assert harness == brute == report, (
@@ -291,7 +316,7 @@ def test_out_of_range_layers_reconcile() -> None:
     layers[ej] = L + 5
 
     harness = count_intralayer_geometric(g, layers)
-    brute = _brute_force_intralayer(g, layers)
+    brute = _brute_force_intralayer(g, layers, shape)
     report = _run_report_intralayer(shape, k, L, layers)
     # All three independent paths must agree on the GATED value:
     # create_subgraphs buckets only [0, L) so run_report drops the pair;
@@ -323,7 +348,7 @@ def test_out_of_range_layers_reconcile() -> None:
     )
 
 
-@pytest.mark.parametrize("shape", ["triangle"])
+@pytest.mark.parametrize("shape", ["notched_square"])
 @pytest.mark.parametrize("k", [12, 20])
 def test_non_default_perimeter_layer_oracle(shape: str, k: int) -> None:
     """Non-default ``perimeter_layer`` coverage: with the perimeter ring
@@ -334,16 +359,13 @@ def test_non_default_perimeter_layer_oracle(shape: str, k: int) -> None:
 
     Discrimination requires perimeter edges to actually participate in
     cached crossing pairs (otherwise the pin value is invisible to the
-    count). Empirically only ``triangle`` satisfies this at small k —
-    its outline has collinear in-side nodes whose ring chords cross
-    interior chords (k=12 → 2 such pairs, k=20 → 17). The convex shapes
-    (``circle``/``square``/``polygon``/``partial_rectangle``) have ZERO
-    perimeter-involved crossing pairs at these sizes (a hull-edge chord
-    of a convex point set crosses nothing), so they cannot discriminate
-    a hardcoded-0 regression and are deliberately excluded here. (See
-    REPORT note: this is a justified deviation from the suggested
-    {triangle, circle} parametrization — circle would be a vacuous
-    discrimination case.)
+    count). On a convex outline a ring edge crosses nothing, so every
+    generator shape is vacuous here — the triangle only qualified while
+    float round-off bent its collinear sides (k=12 → 2 ring-involved
+    pairs, k=20 → 17), which the convexity detector now treats as
+    straight. ``notched_square`` pushes the top-middle node inward, so
+    the two ring edges into the notch are genuinely crossed by the
+    chords passing over it.
 
     ``_brute_force_intralayer``/``_pinned_layers`` pin to
     ``graph.perimeter_layer`` (not a literal 0) and
@@ -360,7 +382,7 @@ def test_non_default_perimeter_layer_oracle(shape: str, k: int) -> None:
     layers = rng.integers(0, L, size=n).astype(float)
 
     harness = count_intralayer_geometric(g, layers)
-    brute = _brute_force_intralayer(g, layers)
+    brute = _brute_force_intralayer(g, layers, shape)
     report = _run_report_intralayer(
         shape, k, L, layers, perimeter_layer=perimeter_layer
     )

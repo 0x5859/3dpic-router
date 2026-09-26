@@ -13,6 +13,7 @@ from .base import (
     BudgetGuard,
     OptimizationResult,
     Optimizer,
+    observer_copy,
     register_optimizer,
 )
 
@@ -136,7 +137,7 @@ class DifferentialEvolutionOptimizer(Optimizer):
                 )
             )
             if self.eval_observer is not None:
-                self.eval_observer(x, float(loss))
+                self.eval_observer(observer_copy(x), float(loss))
             if guard.active:
                 guard.check_and_record(x, float(loss))
             return loss

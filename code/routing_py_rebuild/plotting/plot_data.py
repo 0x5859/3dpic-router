@@ -314,7 +314,9 @@ class PlotData:
             complete.add_edge(int(u), int(v), **dict(attr))
 
         loss_analysis = data.get("loss_analysis", {})
-        loss_crossing = float(params.get("Loss of Crossing", 0.3))
+        # Both writers always record it; the fallback is core.DEFAULT_LOSS_CROSSING
+        # (plotting never imports core).
+        loss_crossing = float(params.get("Loss of Crossing", 0.1))
 
         return cls(
             k=k,

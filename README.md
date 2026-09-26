@@ -21,15 +21,19 @@ Two parallel, numerically-aligned implementations ship:
 Both emit the same self-contained `subgraphsdata.json` snapshot, validated against the
 JSON Schemas in `code/schema/`.
 
+An interactive replay of the optimization on eight boundary layouts, with the crossings in each
+layer, is at <https://0x5859.github.io/3dpic-router/> (source in `pages/`).
+
 ## Layout
 
 | Path | What lives here |
 |---|---|
 | `code/routing_py_rebuild/` | Python core: `core.py` (graph + crossings + loss + JSON I/O), `api.py`, `crosstalk.py`, `positions.py`, `io_utils.py`, the `optimizers/` registry (dual annealing, differential evolution, GA, PSO, CMA-ES, BO, …), `statistics/` (run reports), and `plotting/` (JSON-driven figure rendering). |
 | `code/routing_cpp_rebuild/` | C++ implementation. `src/` + `include/sinic/`, the vendored `external/dual-annealing/` GSA library, `tests/`, and a `build_and_run.sh` one-shot driver. |
-| `code/schema/` | JSON Schemas for the data contract (`subgraphsdata.schema.json`, `run_report.schema.json`). Validated at write **and** read time by both implementations. |
+| `code/schema/` | JSON Schemas for the data contract (`subgraphsdata.schema.json`, `run_report.schema.json`, and the Python-only `optimization_history.schema.json`). Validated at write **and** read time by both implementations. |
 | `code/tests/` | Python test suite — parity, crossings, crosstalk, multilayer, per-optimizer, and statistics — plus `golden/` reference fixtures. |
 | `code/assets/MinimizedRectlinear/` | Pre-computed `minimize{k}.b16` point sets consumed by the `io_utils` readers. |
+| `pages/` | The replay page served on GitHub Pages (`index.html`) and the scripts that record its runs and build it. |
 
 > **Path note:** `schema/` is a runtime dependency of both cores and is located relative
 > to the `code/` tree (Python: sibling of `routing_py_rebuild/`; C++: walked up from the
@@ -61,8 +65,66 @@ print(res["loss"], res["json_path"])
 plot_from_json(res["json_path"], style="visualize", out_dir="/tmp/sin_plot/")
 ```
 
+The default loss model charges 0.1 dB per intralayer crossing, 0.05 dB per taper, and 0.001 dB
+per interlayer crossing, in the Python library, the CLI, and the C++ harness alike. Change it
+with `--loss-crossing`, `--loss-taper`, `--loss-interlayercrossing` (CLI) or the matching
+`loss_crossing=`, `loss_taper=`, `loss_interlayercrossing=` arguments.
+
 See `code/routing_py_rebuild/readme.md` for the full module-level reference (architecture,
 the optimizer/plot-style registries, and the JSON contract).
+
+### Watching the optimization process
+
+By default only the final routing is plotted. `--progress` (CLI) / `progress=` (library)
+also shows how the optimizer got there:
+
+| Mode | What you get |
+|---|---|
+| `off` (default) | Unchanged: final result only. |
+| `live` | A figure — one panel per layer plus the best-loss curve — redrawn while the optimizer runs. It opens in a window on a desktop, updates in place in Jupyter, and on a headless machine rewrites `optimization_live.png`. |
+| `record` | Every improvement is saved to `optimization_history.json`. After the run, the whole process is rendered to `optimization_progress.gif` and `optimization_progress.html`, a self-contained player with play/pause, a slider, and speed control. The final state is also saved as a paper-ready still, `optimization_progress.pdf` (editable text) and `.png` (450 ppi). On a desktop the replay also opens in a window. |
+
+```bash
+uv run python -m routing_py_rebuild optimize --k 12 --maxiter 200 --output-dir /tmp/run --progress live
+uv run python -m routing_py_rebuild optimize --k 12 --maxiter 200 --output-dir /tmp/run --progress record
+
+# Re-render or re-open a recorded run later
+uv run python -m routing_py_rebuild replay --history /tmp/run --show
+```
+
+Tracking never changes the optimization: the same seed gives the same result in every mode.
+`record` costs well under 1% of the optimizer's run time. `live` pauses the optimizer while a
+frame is drawn, capped at about 20% of the run time. Options such as the redraw interval,
+replay formats, frame cap, fps, and dpi go in `--progress-kwargs` / `progress_kwargs`
+(for example `'{"interval": 1.0, "formats": ["gif"]}'`).
+
+### Boundary layouts and arbitrary node coordinates
+
+Nodes default to a square with k/4 per side. `routing_py_rebuild.positions` also builds
+rectangles, circles, triangles, regular polygons, and two or three sides of a rectangle
+(`distribute_nodes(shape, ...)`). Any other coordinates go in through `positions=` (library) or
+`--positions-json` (CLI):
+
+```bash
+# layout.json: {"0": [1.4, 0.0], "1": [2.3, 0.0], ..., "11": [0.0, 1.5]}
+uv run python -m routing_py_rebuild optimize --positions-json layout.json --maxiter 200 \
+    --output-dir /tmp/run --progress record
+```
+
+The file uses the C++ `SINIC_POSITIONS_JSON` format: keys `0 .. k-1`, each an `[x, y]` pair, and k
+is taken from the file. A saved `subgraphsdata.json` or `optimization_history.json` also works,
+which reuses that run's layout. Number the nodes along the boundary, because the perimeter ring
+(node i to i + 1, and k - 1 to 0) is pinned to one layer. The command warns when walking the nodes
+in index order crosses itself. The plots follow the layout: routing panels take its aspect ratio,
+and links that run along a straight stretch of the boundary through other nodes are drawn as
+inward arcs.
+
+When every node lies on a convex outline, two straight links cross exactly when their end nodes
+alternate along the boundary. The optimization then depends only on the node order: a square, a
+triangle, a circle, or any convex chip outline with the same order gives the same result. Nodes in
+a row along a straight side count as collinear up to floating-point rounding, so a slanted side
+behaves like an axis-aligned one. The coordinates change the problem when some nodes sit inside the
+convex hull of the others, for example on a notched outline.
 
 ## C++ quickstart
 

@@ -55,6 +55,26 @@ PositionMap pentagram_positions() {
     return pos;
 }
 
+// Equilateral triangle with `n` nodes per side (corners excluded), built
+// like Python's distribute_nodes_around_triangle: the interpolated side
+// nodes sit ~1e-17 off their side line, with either sign.
+PositionMap triangle_positions(int n) {
+    const double h = std::sqrt(3.0) / 2.0;
+    const sinic::Point v[3] = {{0.0, 0.0}, {1.0, 0.0}, {0.5, h}};
+    PositionMap pos;
+    int idx = 0;
+    for (int s = 0; s < 3; ++s) {
+        const sinic::Point& a = v[s];
+        const sinic::Point& b = v[(s + 1) % 3];
+        for (int j = 1; j <= n; ++j) {
+            const double t = static_cast<double>(j) / (n + 1);
+            pos[idx++] = {a.first + (b.first - a.first) * t,
+                          a.second + (b.second - a.second) * t};
+        }
+    }
+    return pos;
+}
+
 } // namespace
 
 TEST_CASE("CrossingTopology builds row-major edge_list and perimeter mask",
@@ -92,6 +112,33 @@ TEST_CASE("cyclic-convex detector accepts square layouts and rejects "
     REQUIRE(CrossingTopology::is_cyclic_convex(
                 10, distribute_nodes_around_rectangle(3, 2, 5.0, 3.0)));
     REQUIRE(!CrossingTopology::is_cyclic_convex(5, pentagram_positions()));
+}
+
+TEST_CASE("cyclic-convex detector takes round-off-collinear side nodes as "
+          "straight steps",
+          "[cache]") {
+    // Triangle, 4 nodes per side: accepted, and it crosses exactly like
+    // the square with the same node count and order (exact coordinates,
+    // so the brute-force oracle there is round-off free): one pair per
+    // 4 nodes, C(12, 4) = 495.
+    const auto tri = triangle_positions(4);
+    REQUIRE(CrossingTopology::is_cyclic_convex(12, tri));
+    CrossingTopology topo(12, tri);
+    REQUIRE(topo.used_cyclic_fast_path());
+    const auto pairs = topo.crossing_pairs();
+    std::set<std::pair<int, int>> got(pairs.begin(), pairs.end());
+    REQUIRE(got == oracle_pairs(12, distribute_nodes_around_square(3, 10.0)));
+    REQUIRE(got.size() == 495);
+
+    // A straight step that reverses direction is a spike, never convex.
+    const PositionMap row{{0, {1.0, 0.0}}, {1, {2.0, 0.0}},
+                          {2, {3.0, 0.0}}, {3, {4.0, 0.0}}};
+    REQUIRE(!CrossingTopology::is_cyclic_convex(4, row));
+
+    // A real dent, far above round-off, still fails the check.
+    auto dented = distribute_nodes_around_square(3, 10.0);
+    dented[1].second -= 1e-6;  // top-middle node pushed inward
+    REQUIRE(!CrossingTopology::is_cyclic_convex(12, dented));
 }
 
 TEST_CASE("CrossingTopology fast path matches brute-force oracle on the "

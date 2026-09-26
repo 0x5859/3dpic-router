@@ -1,10 +1,13 @@
 """CLI entry: ``python -m routing_py_rebuild ...``.
 
-Three subcommands:
+Four subcommands:
 
   optimize   Run an optimizer end-to-end (graph → solve → JSON → plots).
+             ``--progress live|record`` also shows the optimization process;
+             ``--positions-json`` places the nodes at arbitrary coordinates.
   plot       Reload a saved subgraph JSON and render a chosen style.
   report     Render convergence + timings PNGs from a ``run_report.json``.
+  replay     Re-render / re-open a recorded ``optimization_history.json``.
 
 Defaults match the original demo (k=12, dual_annealing, plain 'visualize').
 """
@@ -15,8 +18,11 @@ import json as _json
 import sys
 
 from .api import run_optimization
-from .plotting import plot_from_json
+from .core import DEFAULT_LOSS_CROSSING, DEFAULT_LOSS_INTERLAYERCROSSING, DEFAULT_LOSS_TAPER
+from .plotting import plot_from_json, render_progress_replay, show_progress_replay
 from .plotting.convergence import plot_convergence, plot_timings
+from .plotting.progress_replay import load_progress_data
+from .positions import load_positions_json, perimeter_is_simple
 
 
 def _parse_kwargs(s: str | None) -> dict:
@@ -27,7 +33,14 @@ def _parse_kwargs(s: str | None) -> dict:
 
 def _add_optimize_parser(sub):
     p = sub.add_parser("optimize", help="Run optimizer end-to-end")
-    p.add_argument("--k", type=int, default=12)
+    p.add_argument("--k", type=int, default=None,
+                   help="Number of nodes (default 12, on a square with k/4 per "
+                        "side; with --positions-json, the file's node count).")
+    p.add_argument("--positions-json", default=None, metavar="PATH",
+                   help='Arbitrary node coordinates {"<node>": [x, y], ...}, keys '
+                        "0..k-1 numbered along the boundary (the C++ "
+                        "SINIC_POSITIONS_JSON format). A saved subgraphsdata.json "
+                        "or optimization_history.json also works (its positions).")
     p.add_argument("--optimizer", default="dual_annealing",
                    choices=[
                        "dual_annealing",
@@ -58,9 +71,15 @@ def _add_optimize_parser(sub):
                         "run_report.summary.crosslayer_crossings_total; "
                         "loss formula is not parameterized on it in M3 "
                         "(see REFACTOR_GOALS.md §7 Q-e).")
-    p.add_argument("--loss-crossing", type=float, default=0.3)
-    p.add_argument("--loss-taper", type=float, default=0.05)
-    p.add_argument("--loss-interlayercrossing", type=float, default=0.006)
+    p.add_argument("--loss-crossing", type=float, default=DEFAULT_LOSS_CROSSING,
+                   help=f"Loss per intralayer crossing, dB (default {DEFAULT_LOSS_CROSSING:g}).")
+    p.add_argument("--loss-taper", type=float, default=DEFAULT_LOSS_TAPER,
+                   help=f"Loss per taper of a layer transition, dB "
+                        f"(default {DEFAULT_LOSS_TAPER:g}).")
+    p.add_argument("--loss-interlayercrossing", type=float,
+                   default=DEFAULT_LOSS_INTERLAYERCROSSING,
+                   help=f"Loss per interlayer crossing, dB "
+                        f"(default {DEFAULT_LOSS_INTERLAYERCROSSING:g}).")
     # M4 (§2-2): crosstalk coefficients + analysis knobs. When both
     # coefficients are None / 0 the engine short-circuits; when at least
     # one is non-zero the rank-3 tensor is computed once after
@@ -100,6 +119,18 @@ def _add_optimize_parser(sub):
     p.add_argument("--no-json", action="store_true")
     p.add_argument("--collect-statistics", action="store_true",
                    help="Record per-iter trace + phase timings; emits run_report.{json,md}.")
+    p.add_argument("--progress", default="off", choices=["off", "live", "record"],
+                   help="Show the optimization process: 'off' (default) = final result "
+                        "only; 'live' = redraw the current best routing while optimizing "
+                        "(GUI window, or optimization_live.png when headless); 'record' = "
+                        "save every improvement to optimization_history.json and replay "
+                        "the whole process afterwards (optimization_progress.gif/.html, "
+                        "plus a PDF/PNG still of the final state).")
+    p.add_argument("--progress-kwargs", default=None,
+                   help="JSON dict of progress options: interval (s between live "
+                        "redraws, default 0.5), show (default true), formats "
+                        "(default [\"gif\", \"html\", \"pdf\", \"png\"]), "
+                        "max_frames (200), fps, dpi (default 120 window / 150 images).")
 
 
 def _add_plot_parser(sub):
@@ -121,18 +152,59 @@ def _add_report_parser(sub):
                    help="Output directory; defaults to the report file's directory.")
 
 
+def _add_replay_parser(sub):
+    p = sub.add_parser("replay", help="Replay a recorded optimization process")
+    p.add_argument("--history", required=True,
+                   help="optimization_history.json, its run directory, or an optimize "
+                        "--output-dir that holds a single run.")
+    p.add_argument("--out-dir", default=None,
+                   help="Output directory; defaults to the history file's directory.")
+    p.add_argument("--formats", default="gif,html,pdf,png",
+                   help="Comma-separated files to write: gif, html (animation), "
+                        "pdf, png (still of the final state); '' = none.")
+    p.add_argument("--fps", type=float, default=None,
+                   help="Frames per second (default: chosen from the frame count).")
+    p.add_argument("--max-frames", type=int, default=200,
+                   help="Most frames per animation; evenly spaced, first and final kept.")
+    p.add_argument("--dpi", type=float, default=None,
+                   help="Animation frame resolution (default 150; the PNG still is 450).")
+    p.add_argument("--show", action="store_true",
+                   help="Open the interactive replay window (needs a GUI backend).")
+
+
 def _build_parser():
     parser = argparse.ArgumentParser(prog="routing_py_rebuild")
     sub = parser.add_subparsers(dest="cmd", required=True)
     _add_optimize_parser(sub)
     _add_plot_parser(sub)
     _add_report_parser(sub)
+    _add_replay_parser(sub)
     return parser
 
 
+def _resolve_positions(args) -> tuple[int, dict | None]:
+    """``(k, positions)`` from ``--k`` / ``--positions-json``."""
+    if not args.positions_json:
+        return (12 if args.k is None else args.k), None
+    try:
+        positions = load_positions_json(args.positions_json)
+    except (OSError, ValueError) as exc:
+        sys.exit(f"--positions-json: {exc}")
+    if args.k is not None and args.k != len(positions):
+        sys.exit(f"--k {args.k} does not match the {len(positions)} nodes in "
+                 f"{args.positions_json}; drop --k or fix the file.")
+    if not perimeter_is_simple(positions):
+        print(f"warning: walking the nodes of {args.positions_json} in index order "
+              "crosses itself; the perimeter ring (i -> i+1) is pinned to one layer, "
+              "so number the nodes along the boundary.", file=sys.stderr)
+    return len(positions), positions
+
+
 def _run_optimize(args):
+    k, positions = _resolve_positions(args)
     res = run_optimization(
-        k=args.k,
+        k=k,
+        positions=positions,
         optimizer=args.optimizer,
         maxiter=args.maxiter,
         seed=args.seed,
@@ -158,6 +230,8 @@ def _run_optimize(args):
         save_json=not args.no_json,
         run_loss_analysis=not args.no_loss_analysis,
         collect_statistics=args.collect_statistics,
+        progress=args.progress,
+        progress_kwargs=_parse_kwargs(args.progress_kwargs),
     )
     print(f"Final loss: {res['loss']}")
     print(f"JSON: {res['json_path']}")
@@ -184,6 +258,19 @@ def _run_report(args):
     print(f"Timings: {tim}")
 
 
+def _run_replay(args):
+    data = load_progress_data(args.history)
+    formats = [f.strip() for f in args.formats.split(",") if f.strip()]
+    paths = render_progress_replay(
+        data, out_dir=args.out_dir, formats=formats, fps=args.fps,
+        max_frames=args.max_frames, dpi=args.dpi,
+    )
+    for kind, path in paths.items():
+        print(f"{kind.upper()}: {path}")
+    if args.show:
+        show_progress_replay(data, fps=args.fps, max_frames=args.max_frames, dpi=args.dpi)
+
+
 def main(argv=None):
     args = _build_parser().parse_args(argv)
     if args.cmd == "optimize":
@@ -192,6 +279,8 @@ def main(argv=None):
         _run_plot(args)
     elif args.cmd == "report":
         _run_report(args)
+    elif args.cmd == "replay":
+        _run_replay(args)
     else:
         sys.exit("unknown command")
 

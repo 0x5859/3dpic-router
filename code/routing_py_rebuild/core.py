@@ -57,6 +57,19 @@ def _load_subgraphs_schema() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Default loss model, dB per event: a crossing between two links in the
+# same layer (intralayer), one taper of a layer transition, and a crossing
+# between links in different layers (interlayer). ``api.make_graph`` /
+# ``api.run_optimization`` and the CLI take their defaults from here; the
+# C++ harness (``include/sinic/graph.hpp``, ``src/main.cpp``) uses the
+# same values.
+# ---------------------------------------------------------------------------
+DEFAULT_LOSS_CROSSING = 0.1
+DEFAULT_LOSS_TAPER = 0.05
+DEFAULT_LOSS_INTERLAYERCROSSING = 0.001
+
+
+# ---------------------------------------------------------------------------
 # M3 + post-M8 (2026-05-15): waveguides_per_link notice text — shared
 # between __init__ and the v1.x→v2.0 loader fallback (PlotData) so the
 # message stays consistent. REFACTOR_GOALS.md §4 M3 附注 "Warning 策略"
@@ -85,6 +98,14 @@ _WPL_EXPERIMENTAL_WARNING = (
 # wpl with link bandwidth in Gbps). The cap rejects the value rather
 # than emit an "experimental" warning that masks the typo.
 _WPL_PHYSICAL_MAX = 32
+
+# Phase A convexity detector: a boundary turn whose |sin| is at most this
+# is a straight step. Side nodes computed by interpolation (triangle,
+# polygon generators, user coordinates from trig) sit ~1e-17 (relative) off
+# their line with either sign; without the tolerance those layouts missed
+# the cyclic fast path and their crossing set depended on round-off. Mirrors
+# ``COLLINEAR_TOL`` in ``routing_cpp_rebuild/src/crossings_cache.cpp``.
+_COLLINEAR_TOL = 1e-9
 
 # Process-wide one-time emit flag for the wpl=1 informational notice.
 # Each module that validates wpl owns its own copy of this flag so that
@@ -163,9 +184,10 @@ def _validate_waveguides_per_link(wpl: int) -> int:
 # 0.0 for some triples (wrongly taking the collinear branch) and to a
 # round-off-garbage nonzero for others (wrongly taking / skipping the proper
 # branch). That violated the fallback's "bit-exact with ``edge_crosses``"
-# contract and corrupted ``_crossing_pairs`` on triangle / polygon layouts
-# (the cyclic-convex square path was never affected — it takes the exact
-# combinatorial fast path).
+# contract and corrupted ``_crossing_pairs`` on triangle / polygon layouts.
+# Those convex layouts now take the combinatorial fast path (their side
+# runs count as straight within ``_COLLINEAR_TOL``); the exact predicate
+# still decides every non-convex layout, near-collinear nodes included.
 #
 # Every float64 is an exact dyadic rational, so for finite, normal-range
 # coordinates the sign of the determinant is exactly computable.
@@ -423,9 +445,10 @@ class SiNInterconnectionGraph:
         emits a one-time informational notice per process; wpl ∈
         {3, 4, ..., 32} emits an experimental warning; non-positive /
         non-int / > 32 raises.
-    loss_crossing, loss_taper, loss_interlayercrossing : float
-        Per-event loss coefficients (dB-equivalent integer-summed; see
-        §2-2 for unit conventions).
+    loss_crossing, loss_taper, loss_interlayercrossing : float, default 0.1, 0.05, 0.001
+        Per-event loss coefficients — intralayer crossing, taper, and
+        interlayer crossing (dB-equivalent integer-summed; see §2-2 for
+        unit conventions). Defaults: ``DEFAULT_LOSS_*``.
     loss_intralayer_crosstalk, loss_interlayer_crosstalk : float | None
         Crosstalk leakage coefficients (fractional power per crossing).
         Recorded on the graph for downstream consumers — the per-edge
@@ -449,9 +472,9 @@ class SiNInterconnectionGraph:
         perimeter_layer: int | None = None,
         layer_pitch_um: float = 1.2,
         waveguides_per_link: int = 1,
-        loss_crossing: float = 0.3,
-        loss_taper: float = 1.0,
-        loss_interlayercrossing: float = 0.006,
+        loss_crossing: float = DEFAULT_LOSS_CROSSING,
+        loss_taper: float = DEFAULT_LOSS_TAPER,
+        loss_interlayercrossing: float = DEFAULT_LOSS_INTERLAYERCROSSING,
         loss_intralayer_crosstalk: float | None = None,
         loss_interlayer_crosstalk: float | None = None,
         coherence_model: str = "incoherent_v1",
@@ -719,6 +742,15 @@ class SiNInterconnectionGraph:
           (winding-1) convex polygon. Pentagram-like layouts have signed
           sum ±4π and so flunk this check.
 
+        Nodes in a row along a straight side (square, rectangle, triangle,
+        polygon layouts) make straight steps. A step counts as straight
+        when ``|sin(turn)| <= _COLLINEAR_TOL`` — float round-off leaves
+        interpolated side nodes ~1e-17 off their line with either sign —
+        and it must go forward (a reversal is a spike, never convex).
+        Such weakly convex layouts cross exactly like a strictly convex
+        one with the same node order, which is what ``edge_crosses``
+        gives on exactly collinear coordinates.
+
         These extra guards mean a non-cyclic-convex caller silently falls
         through to the geometric fallback rather than getting wrong
         crossing pairs from the alternating test. Verified by
@@ -747,7 +779,12 @@ class SiNInterconnectionGraph:
         cross = e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]
         dot = e1[:, 0] * e2[:, 0] + e1[:, 1] * e2[:, 1]
 
-        nz = cross[cross != 0]
+        straight = np.abs(cross) <= (
+            _COLLINEAR_TOL * np.hypot(e1[:, 0], e1[:, 1]) * np.hypot(e2[:, 0], e2[:, 1])
+        )
+        if bool(np.any(straight & (dot <= 0))):
+            return False
+        nz = cross[~straight]
         if nz.size == 0:
             return False
         if not (bool(np.all(nz > 0)) or bool(np.all(nz < 0))):
@@ -1048,15 +1085,40 @@ class SiNInterconnectionGraph:
         i-th occupied layer in sorted order", which the multi-layer
         analyze_loss / writer paths rely on (REFACTOR_GOALS.md §2-3 目标
         A). For L=2 with one layer empty (e.g. ``all1`` test pattern), the
-        empty layer-0 entry is still present — count_interlayercrossings
-        is invoked for every adjacent pair regardless, and naturally
-        no-ops when one side is empty.
+        empty layer-0 entry is still present.
 
-        Interlayer crossings are now computed for **every adjacent pair**
+        Interlayer crossings are counted for **every adjacent pair**
         ``(i, i+1)`` per §2-3 目标 D (non-adjacent layer pairs are not
         modelled — physical evanescent coupling for layer distance ≥ 2 is
-        below the −60 dB crosstalk floor).
+        below the −60 dB crosstalk floor), with the per-edge accounting of
+        :meth:`count_interlayercrossings`.
+
+        Crossings come from the cached Phase A index — the crossing relation
+        :meth:`loss_function` scores — so the stamped per-edge ``crossings``
+        / ``interlayercrossings*`` and losses always match what the
+        optimizer saw for this assignment, on every layout, and no O(E²)
+        geometry pass runs per layer. Wherever ``edge_crosses`` is exact
+        (every layout except float round-off on collinear side runs; see
+        :meth:`_is_cyclic_convex_positions`) the counts equal
+        :meth:`count_crossings_with_detail` / :meth:`count_interlayercrossings`
+        on the layer subgraphs.
         """
+        self._ensure_crossings_ready()
+        n_edges = len(self._edge_list)
+        layer_of = np.array([self.G.edges[e]["layer"] for e in self._edge_list], dtype=np.int64)
+        pairs = self._crossing_pairs
+        la = layer_of[pairs[:, 0]]
+        lb = layer_of[pairs[:, 1]]
+        same = (la == lb) & (la >= 0) & (la < self.L)
+        intra = np.bincount(pairs[same].ravel(), minlength=n_edges)
+        pairs_in_layer = np.bincount(la[same], minlength=self.L)
+        # Adjacent-layer events: the lower edge sees one "above", the upper
+        # edge one "below"; the legacy counter is their sum.
+        adj = (np.abs(la - lb) == 1) & (np.minimum(la, lb) >= 0) & (np.maximum(la, lb) < self.L)
+        a_lower = la < lb
+        above = np.bincount(np.where(a_lower, pairs[:, 0], pairs[:, 1])[adj], minlength=n_edges)
+        below = np.bincount(np.where(a_lower, pairs[:, 1], pairs[:, 0])[adj], minlength=n_edges)
+
         self.sub_G = []
         self.total_crossings_of_sub_G = []
         self.edge_cross_counts_of_sub_G = []
@@ -1073,23 +1135,19 @@ class SiNInterconnectionGraph:
                 # ``Graph.nodes`` returns range(k)).
                 subgraph = nx.Graph()
                 subgraph.add_nodes_from(range(self.k))
-            nx.set_edge_attributes(subgraph, 0, "crossings")
-            nx.set_edge_attributes(subgraph, 0, "interlayercrossings")
-            nx.set_edge_attributes(subgraph, 0, "interlayercrossings_above")
-            nx.set_edge_attributes(subgraph, 0, "interlayercrossings_below")
-            total_crossings, edge_cross_counts = self.count_crossings_with_detail(subgraph)
+            edge_cross_counts = {}
+            for u, v in subgraph.edges():
+                i = self._edge_index[(u, v) if (u, v) in self._edge_index else (v, u)]
+                data = subgraph.edges[u, v]
+                data["crossings"] = int(intra[i])
+                data["interlayercrossings"] = int(above[i] + below[i])
+                data["interlayercrossings_above"] = int(above[i])
+                data["interlayercrossings_below"] = int(below[i])
+                edge_cross_counts[(u, v)] = int(intra[i])
             self.cal_loss_of_edge(subgraph)
             self.sub_G.append(subgraph)
-            self.total_crossings_of_sub_G.append(total_crossings)
+            self.total_crossings_of_sub_G.append(int(pairs_in_layer[layer]))
             self.edge_cross_counts_of_sub_G.append(edge_cross_counts)
-
-        # M3: every adjacent layer pair gets a count_interlayercrossings
-        # pass. The legacy L=2 path is the i=0 single iteration; for L>=3
-        # the middle layer accumulates events from both its neighbours
-        # via the ``reset=False`` default — middle-layer
-        # ``interlayercrossings`` = ``_above + _below`` per-edge.
-        for i in range(self.L - 1):
-            self.count_interlayercrossings(self.sub_G[i], self.sub_G[i + 1])
 
         for sg in self.sub_G:
             self.update_interlayercrossings_loss(sg)
@@ -1192,6 +1250,40 @@ class SiNInterconnectionGraph:
         if selected.any():
             return float(np.mean(per_edge_loss[selected]))
         return 0.0
+
+    def effective_layers(self, layers: Iterable[float]) -> np.ndarray:
+        """Integer per-edge layers that ``loss_function(layers)`` scores.
+
+        Rounds the (possibly continuous) optimizer vector the same way as
+        :meth:`loss_function` / :meth:`apply_optimization_result` and pins
+        the perimeter ring to ``perimeter_layer``. Indexed by
+        ``list(self.G.edges())``. Read-only helper for progress tracking;
+        not used by the optimizer hot loop.
+        """
+        self._ensure_crossings_ready()
+        pinned = np.round(np.asarray(layers, dtype=float)).astype(np.int64)
+        if pinned.shape != (len(self._edge_list),):
+            raise ValueError(
+                f"layers has shape {pinned.shape}, expected ({len(self._edge_list)},)"
+            )
+        pinned[self._perimeter_mask] = self.perimeter_layer
+        return pinned
+
+    def intralayer_crossing_counts(self, layers: np.ndarray) -> np.ndarray:
+        """Per-edge same-layer crossing counts for an :meth:`effective_layers`
+        vector, from the cached Phase A index (no geometry pass).
+
+        Equals the ``crossings`` attribute that :meth:`create_subgraphs`
+        stamps on each layer subgraph for the same assignment.
+        """
+        self._ensure_crossings_ready()
+        n_edges = len(self._edge_list)
+        pairs = self._crossing_pairs
+        if not pairs.shape[0]:
+            return np.zeros(n_edges, dtype=np.int64)
+        layers = np.asarray(layers)
+        same = layers[pairs[:, 0]] == layers[pairs[:, 1]]
+        return np.bincount(pairs[same].ravel(), minlength=n_edges).astype(np.int64)
 
     def _apply_layer_assignment(self, layers: np.ndarray) -> None:
         """Stamp per-edge layers, pinning the perimeter ring to

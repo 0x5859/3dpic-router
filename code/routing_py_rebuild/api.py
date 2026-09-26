@@ -27,6 +27,12 @@ aggregate stats writer applies the
 ``crosslayer_crossings_total = waveguides_per_link * geometric_events``
 formula with explicit convention labelling — see
 :func:`_extract_aggregate_stats`.
+
+``progress="live"`` / ``"record"`` visualizes the optimization process
+itself (see :mod:`.progress`): a live-updating figure while the optimizer
+runs, or every improvement saved to ``optimization_history.json`` and
+replayed as an animation afterwards. The default ``"off"`` leaves the run
+untouched.
 """
 from __future__ import annotations
 
@@ -35,7 +41,12 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from .core import SiNInterconnectionGraph
+from .core import (
+    DEFAULT_LOSS_CROSSING,
+    DEFAULT_LOSS_INTERLAYERCROSSING,
+    DEFAULT_LOSS_TAPER,
+    SiNInterconnectionGraph,
+)
 from .crosstalk import compute_crosstalk_tensor
 from .optimizers import get_optimizer
 from .plotting import (
@@ -46,6 +57,12 @@ from .plotting import (
     visualize_ring,
 )
 from .positions import distribute_nodes
+from .progress import (
+    ProgressOptions,
+    ProgressTracker,
+    chain_observers,
+    normalize_progress_mode,
+)
 from .statistics import NullSink, PhaseTimer, RunRecorder, write_run_report
 
 
@@ -137,9 +154,9 @@ def make_graph(
     perimeter_layer: int | None = None,
     layer_pitch_um: float = 1.2,
     waveguides_per_link: int = 1,
-    loss_crossing: float = 0.3,
-    loss_taper: float = 1.0,
-    loss_interlayercrossing: float = 0.006,
+    loss_crossing: float = DEFAULT_LOSS_CROSSING,
+    loss_taper: float = DEFAULT_LOSS_TAPER,
+    loss_interlayercrossing: float = DEFAULT_LOSS_INTERLAYERCROSSING,
     loss_intralayer_crosstalk: float | None = None,
     loss_interlayer_crosstalk: float | None = None,
     coherence_model: str = "incoherent_v1",
@@ -192,9 +209,9 @@ def run_optimization(
     perimeter_layer: int | None = None,
     layer_pitch_um: float = 1.2,
     waveguides_per_link: int = 1,
-    loss_crossing: float = 0.3,
-    loss_taper: float = 1.0,
-    loss_interlayercrossing: float = 0.006,
+    loss_crossing: float = DEFAULT_LOSS_CROSSING,
+    loss_taper: float = DEFAULT_LOSS_TAPER,
+    loss_interlayercrossing: float = DEFAULT_LOSS_INTERLAYERCROSSING,
     loss_intralayer_crosstalk: float | None = None,
     loss_interlayer_crosstalk: float | None = None,
     coherence_model: str = "incoherent_v1",
@@ -212,6 +229,8 @@ def run_optimization(
     trace_stride: int = 1,
     fixed_layers: list[int] | None = None,
     eval_observer: Callable[..., None] | None = None,
+    progress: str = "off",
+    progress_kwargs: dict | None = None,
 ) -> dict[str, Any]:
     """Run an optimization end-to-end and return artifacts.
 
@@ -249,6 +268,25 @@ def run_optimization(
     future use; today the engine is a pure post-optimization analysis and
     does not feed back into the optimizer loop.
 
+    ``progress`` visualizes the optimization process (default ``"off"``
+    = unchanged behavior, final result only):
+
+      - ``"live"`` — a figure of the current best routing + loss curve,
+        redrawn while the optimizer runs (GUI window; Jupyter output;
+        or ``optimization_live.png`` rewritten on a headless machine).
+      - ``"record"`` — every improvement is saved to
+        ``optimization_history.json`` next to ``subgraphsdata.json``; after
+        the run the whole process is rendered to
+        ``optimization_progress.gif`` + ``optimization_progress.html``
+        (interactive player), the final state to
+        ``optimization_progress.pdf`` / ``.png`` (450 ppi still), and it
+        is replayed when a display is available.
+
+    ``progress_kwargs`` tunes it — see :class:`progress.ProgressOptions`
+    (``interval``, ``show``, ``formats``, ``max_frames``, ``fps``, ``dpi``).
+    Tracking is an ``eval_observer`` and never changes the optimization;
+    ``"live"`` does add its drawing time to the optimizer wall time.
+
     Returns a dict with keys:
       - ``graph`` — the SiNInterconnectionGraph instance
       - ``best_layers`` — list of optimized layer assignments per edge
@@ -259,6 +297,9 @@ def run_optimization(
       - ``report_path`` — path to ``run_report.json`` (or None if
         ``collect_statistics`` is False)
       - ``crosstalk`` — the rank-3 tensor payload (or None if not computed)
+      - ``progress`` — None when ``progress="off"``; otherwise
+        ``{"mode", ...paths}`` with ``history`` / ``gif`` / ``html``
+        (record) or ``live_image`` (live, headless) when written
     """
     if save_json and not output_dir:
         raise ValueError(
@@ -269,6 +310,18 @@ def run_optimization(
         raise ValueError(
             "collect_statistics=True requires a non-empty output_dir "
             "(run_report.json is written next to subgraphsdata.json)."
+        )
+    progress_mode = normalize_progress_mode(progress)
+    progress_options = ProgressOptions.from_kwargs(progress_kwargs)
+    if progress_mode != "off" and fixed_layers is not None:
+        raise ValueError(
+            f"progress={progress_mode!r} needs an optimizer run to show; "
+            "it cannot be combined with fixed_layers."
+        )
+    if progress_mode == "record" and not output_dir:
+        raise ValueError(
+            "progress='record' requires a non-empty output_dir "
+            "(optimization_history.json is written next to subgraphsdata.json)."
         )
 
     # M8 parity-driver path (REFACTOR_GOALS.md §6 T6). When `fixed_layers`
@@ -383,18 +436,48 @@ def run_optimization(
             best_layers = fixed_list
 
         result = _FixedResult()
+        tracker = None
     else:
+        tracker: ProgressTracker | None = None
+        if progress_mode != "off":
+            tracker = ProgressTracker(
+                graph,
+                mode=progress_mode,
+                options=progress_options,
+                out_dir=graph.filepath,
+                run={
+                    "optimizer": optimizer,
+                    "maxiter": maxiter,
+                    "seed": seed,
+                    "loss_crossing": loss_crossing,
+                    "loss_taper": loss_taper,
+                    "loss_interlayercrossing": loss_interlayercrossing,
+                },
+            )
         optimizer_cls = get_optimizer(optimizer)
         opt = optimizer_cls(
             graph,
             seed=seed,
             sink=sink,
-            eval_observer=eval_observer,
+            eval_observer=chain_observers(eval_observer, tracker),
             **(optimizer_kwargs or {}),
         )
 
-        with PhaseTimer(sink, "optimization_wall"):
-            result = opt.optimize(maxiter=maxiter)
+        try:
+            with PhaseTimer(sink, "optimization_wall"):
+                result = opt.optimize(maxiter=maxiter)
+        except KeyboardInterrupt:
+            # Keep what a long recorded run has found so far.
+            partial = tracker.write_history() if tracker is not None else None
+            if partial:
+                print(
+                    f"[progress] interrupted — {len(tracker.frames)} improvements "
+                    f"saved to {partial}; replay with "
+                    f"`python -m routing_py_rebuild replay --history {partial}`"
+                )
+            raise
+        if tracker is not None:
+            tracker.finish(result.best_layers, result.fun)
 
     json_path: str | None = None
     plot_data: PlotData | None = None
@@ -492,6 +575,14 @@ def run_optimization(
         with PhaseTimer(sink, "loss_analysis_plot"):
             visualize_loss_analysis(plot_data)
 
+    if tracker is not None and progress_mode == "record":
+        with PhaseTimer(sink, "progress_history_write"):
+            tracker.write_history()
+        with PhaseTimer(sink, "progress_replay"):
+            tracker.write_replay()
+        for kind, path in tracker.outputs.items():
+            print(f"[progress] {kind}: {path}")
+
     report_path: str | None = None
     if collect_statistics:
         # §1-1-a item 3 + §4 M3 附注: push per-layer aggregate stats into
@@ -505,6 +596,13 @@ def run_optimization(
         report_dir = graph.filepath if graph.filepath else output_dir
         report_path, _md_path = write_run_report(report, report_dir)
 
+    progress_info: dict[str, str] | None = None
+    if tracker is not None:
+        # Last: a replay window / held live window blocks until closed, and
+        # every file is already on disk by then.
+        tracker.present()
+        progress_info = {"mode": progress_mode, **tracker.outputs}
+
     return {
         "graph": graph,
         "best_layers": result.best_layers,
@@ -513,6 +611,7 @@ def run_optimization(
         "plot_data": plot_data,
         "report_path": report_path,
         "crosstalk": crosstalk_payload,
+        "progress": progress_info,
     }
 
 

@@ -145,6 +145,17 @@ class BudgetGuard:
                 )
 
 
+def observer_copy(x) -> np.ndarray:
+    """The ``x`` an ``eval_observer`` receives: a private float copy.
+
+    Optimizers keep the evaluated vector — scipy copies an accepted point
+    into its own state only after the objective returns, and population
+    methods pass rows of their population matrix — so an observer that
+    wrote to the live vector would reach the optimizer's state and result.
+    """
+    return np.array(x, dtype=float)
+
+
 _REGISTRY: dict[str, type[Optimizer]] = {}
 
 
@@ -189,12 +200,13 @@ class Optimizer:
         # `wrapped`, at the same site/order as `sink.on_iter`. Default
         # None ⇒ numerically identical to pre-L2 (parity-tested).
         # CONTRACT: the observer MUST treat `x` as read-only (must not
-        # mutate it). It is called only AFTER `loss = loss_function(x)`
-        # and scipy holds its own vector, so a well-behaved observer
-        # cannot perturb the optimizer. We deliberately do NOT
-        # defensively copy `x` (hot path; spec D1 low-overhead);
-        # `test_x_mutating_observer_cannot_perturb_optimizer` is the
-        # defense-in-depth guard.
+        # mutate it). It is called only AFTER `loss = loss_function(x)`,
+        # and every call site passes `observer_copy(x)` — a private copy,
+        # made only when an observer is set (the default None path stays
+        # copy-free, spec D1 low-overhead) — because scipy copies an
+        # accepted point after the call, so writes to the live vector
+        # would leak into its state. `test_x_mutating_observer_cannot_
+        # perturb_optimizer` is the defense-in-depth guard.
         self.eval_observer = eval_observer
         self.kwargs = kwargs
 

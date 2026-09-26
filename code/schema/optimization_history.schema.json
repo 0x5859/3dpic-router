@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://3dsinic.local/schema/optimization_history.schema.json",
+  "title": "optimization_history.json (v1.0)",
+  "description": "Optimization process of one run, written by `run_optimization(progress=\"record\")`: every new-best routing (frame) found by the optimizer plus the final applied result, and a bounded min/max envelope of all evaluated losses. Self-contained: `python -m routing_py_rebuild replay` renders it without the graph. Validated at write and read time.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "k",
+    "L",
+    "edge_coupler_layer",
+    "perimeter_layer",
+    "positions",
+    "edges",
+    "run",
+    "frames",
+    "summary"
+  ],
+  "additionalProperties": false,
+  "$comment": "Cross-field constraints JSON Schema cannot express (len(frames[].layers) == len(edges), layers in [0, L), edge endpoints have positions, evaluations.start/min/max aligned and start increasing from 1) are enforced by plotting/progress_figure.py::_validate_history.",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+$"
+    },
+    "k": { "type": "integer", "minimum": 3 },
+    "L": { "type": "integer", "minimum": 1 },
+    "edge_coupler_layer": { "type": "integer", "minimum": 0 },
+    "perimeter_layer": { "type": "integer", "minimum": 0 },
+    "positions": {
+      "type": "object",
+      "patternProperties": {
+        "^[0-9]+$": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      },
+      "additionalProperties": false
+    },
+    "edges": {
+      "type": "array",
+      "description": "Edge order that frames[].layers / frames[].crossings are indexed by.",
+      "items": {
+        "type": "array",
+        "items": { "type": "integer", "minimum": 0 },
+        "minItems": 2,
+        "maxItems": 2
+      }
+    },
+    "run": {
+      "type": "object",
+      "description": "Free-form run metadata (optimizer, maxiter, seed, loss coefficients).",
+      "additionalProperties": true
+    },
+    "frames": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["eval_index", "wall_ms", "loss", "layers", "crossings", "final"],
+        "additionalProperties": false,
+        "properties": {
+          "eval_index": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "0-based loss_function evaluation index that produced this routing."
+          },
+          "wall_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Milliseconds since the optimizer started."
+          },
+          "loss": { "type": "number" },
+          "layers": {
+            "type": "array",
+            "description": "Effective layer per edge (rounded, perimeter ring pinned).",
+            "items": { "type": "integer", "minimum": 0 }
+          },
+          "crossings": {
+            "type": "array",
+            "description": "Same-layer crossings per edge (equals Layer_i edge `crossings` in subgraphsdata.json for the final frame).",
+            "items": { "type": "integer", "minimum": 0 }
+          },
+          "final": {
+            "type": "boolean",
+            "description": "True only for the last frame when it is the result applied to the graph."
+          }
+        }
+      }
+    },
+    "evaluations": {
+      "type": "object",
+      "required": ["count", "start", "min", "max"],
+      "additionalProperties": false,
+      "description": "Min/max loss of every evaluation, bucketed: bucket j covers the 1-based evaluation numbers start[j] .. start[j+1]-1 (the last one runs to count). Buckets are log-spaced (width 1 at first, doubling every `per_octave` buckets). null = no finite loss in the bucket.",
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "start": { "type": "array", "items": { "type": "integer", "minimum": 1 } },
+        "min": { "type": "array", "items": { "type": ["number", "null"] } },
+        "max": { "type": "array", "items": { "type": ["number", "null"] } }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["evaluations", "improvements", "initial_loss", "final_loss", "wall_ms"],
+      "additionalProperties": true,
+      "properties": {
+        "evaluations": { "type": "integer", "minimum": 0 },
+        "improvements": { "type": "integer", "minimum": 0 },
+        "initial_loss": { "type": "number" },
+        "final_loss": { "type": "number" },
+        "wall_ms": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

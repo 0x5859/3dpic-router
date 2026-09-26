@@ -96,7 +96,10 @@ public:
     // polygon (winding number ±1). A consistent turn-sign alone is
     // not sufficient (winding-2 pentagrams pass that), so the function
     // additionally requires |Σ signed turn angles| ≈ 2π within 1e-6
-    // and all positions pairwise distinct. Mirrors Python
+    // and all positions pairwise distinct. Nodes in a row along a side
+    // are straight steps: a turn with |sin| <= 1e-9 is straight (float
+    // round-off leaves interpolated side nodes ~1e-17 off their line)
+    // and must go forward. Mirrors Python
     // `core.py::_is_cyclic_convex_positions`.
     static bool is_cyclic_convex(int k, const PositionMap& positions);
 
